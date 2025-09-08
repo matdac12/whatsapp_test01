@@ -57,3 +57,46 @@ If needed, we can delete a conversation.
 
 deleted = client.conversations.delete("conv_123")
 print(deleted)
+
+
+We can analyze a piece of text and ask OpenAi to return a structured output
+
+from pydantic import BaseModel
+from typing import Optional
+
+class User(BaseModel):
+    name: Optional[str] = None
+    age: Optional[int] = None
+    is_male: Optional[bool] = None
+    found_all_info : bool
+    what_is_missing : Optional[str] = None
+
+response = client.responses.parse(
+    model="gpt-4o",
+    input=[
+        {"role": "system", "content": "Extract the client information. Name, age and a boolean to see if it's a male. If you found all info in the text, return true"},
+        {
+            "role": "user",
+            "content": " i'm a male",
+        },
+    ],
+    text_format=User,
+)
+
+user = response.output_parsed
+user
+
+the user would print like this: User(name='Mattia', age=28, is_male=True, found_all_info=True)
+
+then we would upload the info to the conversation: 
+items = client.conversations.items.create(
+  conv_id,
+  items=[
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": f"From our analysis, this is what is missing from the client:{user.model_dump_json()} "}],
+    }
+  ],
+)
+print(items.data)
