@@ -236,6 +236,80 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
         
         return updated_profile.info, is_newly_complete
     
+    def update_profile_manually(self, whatsapp_number: str, name: Optional[str] = None, 
+                               last_name: Optional[str] = None, ragione_sociale: Optional[str] = None,
+                               email: Optional[str] = None) -> bool:
+        """
+        Manually update a client's profile without extraction
+        
+        Args:
+            whatsapp_number: User's WhatsApp number
+            name: First name
+            last_name: Last name
+            ragione_sociale: Company name
+            email: Email address
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if whatsapp_number not in self.profiles:
+                logger.error(f"Profile not found for {whatsapp_number}")
+                return False
+            
+            profile = self.profiles[whatsapp_number]
+            
+            # Update fields if provided
+            if name is not None:
+                profile.info.name = name if name.strip() else None
+            if last_name is not None:
+                profile.info.last_name = last_name if last_name.strip() else None
+            if ragione_sociale is not None:
+                profile.info.ragione_sociale = ragione_sociale if ragione_sociale.strip() else None
+            if email is not None:
+                profile.info.email = email if email.strip() else None
+            
+            # Recalculate completeness
+            profile.info.found_all_info = all([
+                profile.info.name,
+                profile.info.last_name,
+                profile.info.ragione_sociale,
+                profile.info.email
+            ])
+            
+            # Update what_is_missing
+            missing = []
+            if not profile.info.name:
+                missing.append('nome')
+            if not profile.info.last_name:
+                missing.append('cognome')
+            if not profile.info.ragione_sociale:
+                missing.append('ragione sociale (azienda)')
+            if not profile.info.email:
+                missing.append('indirizzo email')
+            
+            if missing:
+                if len(missing) == 1:
+                    profile.info.what_is_missing = f"Manca ancora: {missing[0]}"
+                else:
+                    profile.info.what_is_missing = f"Mancano ancora: {', '.join(missing[:-1])} e {missing[-1]}"
+            else:
+                profile.info.what_is_missing = None
+            
+            # Update timestamps
+            profile.updated_at = datetime.now()
+            if profile.info.found_all_info and not profile.completed_at:
+                profile.mark_complete()
+                logger.info(f"Profile manually completed for {whatsapp_number}")
+            
+            self.save_profiles()
+            logger.info(f"Profile manually updated for {whatsapp_number}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in manual profile update: {e}")
+            return False
+    
     def get_profile_status(self, whatsapp_number: str) -> Optional[Dict]:
         """
         Get the current status of a user's profile

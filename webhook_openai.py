@@ -484,6 +484,61 @@ def api_send_message():
     success = send_whatsapp_message(phone, message)
     return jsonify({'success': success})
 
+@app.route('/api/profile/<phone>', methods=['GET'])
+def api_get_profile(phone):
+    """
+    API endpoint to get profile data for a phone number
+    """
+    if data_extractor and phone in data_extractor.profiles:
+        profile = data_extractor.profiles[phone]
+        return jsonify({
+            'name': profile.info.name,
+            'last_name': profile.info.last_name,
+            'ragione_sociale': profile.info.ragione_sociale,
+            'email': profile.info.email,
+            'found_all_info': profile.info.found_all_info
+        })
+    else:
+        # Return empty profile if not found
+        return jsonify({
+            'name': None,
+            'last_name': None,
+            'ragione_sociale': None,
+            'email': None,
+            'found_all_info': False
+        })
+
+@app.route('/api/profile/<phone>', methods=['POST'])
+def api_update_profile(phone):
+    """
+    API endpoint to manually update profile data
+    """
+    if not data_extractor:
+        return jsonify({'success': False, 'error': 'Data extractor not initialized'}), 503
+    
+    data = request.json
+    
+    try:
+        # Create or get existing profile
+        if phone not in data_extractor.profiles:
+            # Get conversation ID if exists
+            conversation_id = ai_manager.conversations.get(phone, 'manual_entry') if ai_manager else 'manual_entry'
+            profile = data_extractor.get_or_create_profile(phone, conversation_id)
+        
+        # Update profile with manual data
+        success = data_extractor.update_profile_manually(
+            phone,
+            name=data.get('name'),
+            last_name=data.get('last_name'),
+            ragione_sociale=data.get('ragione_sociale'),
+            email=data.get('email')
+        )
+        
+        return jsonify({'success': success})
+    except Exception as e:
+        logger.error(f"Error updating profile: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 if __name__ == '__main__':
     logger.info(f"\n🚀 WhatsApp OpenAI Bot Server")
     logger.info(f"=" * 50)
