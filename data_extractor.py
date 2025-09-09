@@ -14,6 +14,7 @@ from pathlib import Path
 
 from openai import OpenAI
 from data_models import ClientInfo, ClientProfile
+from database import db
 
 logger = logging.getLogger(__name__)
 
@@ -28,57 +29,64 @@ class DataExtractor:
         """
         self.client = OpenAI(api_key=api_key)
         self.model = model
-        self.profiles_file = "client_profiles.json"
         self.profiles: Dict[str, ClientProfile] = {}
         
-        # Load existing profiles
+        # Load existing profiles from database
         self.load_profiles()
         
         logger.info(f"Data Extractor initialized with model: {self.model}")
         logger.info(f"Loaded {len(self.profiles)} existing profiles")
     
     def load_profiles(self):
-        """Load existing client profiles from file"""
-        if os.path.exists(self.profiles_file):
-            try:
-                with open(self.profiles_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for phone, profile_data in data.items():
-                        # Convert datetime strings back to datetime objects
-                        for date_field in ['created_at', 'updated_at', 'completed_at']:
-                            if profile_data.get(date_field):
-                                profile_data[date_field] = datetime.fromisoformat(profile_data[date_field])
-                        
-                        # Reconstruct ClientInfo
-                        info_data = profile_data.pop('info')
-                        client_info = ClientInfo(**info_data)
-                        
-                        # Create ClientProfile
-                        self.profiles[phone] = ClientProfile(info=client_info, **profile_data)
+        """Load existing client profiles from database"""
+        try:
+            db_profiles = db.get_all_profiles()
+            for phone, profile_data in db_profiles.items():
+                # Convert database row to ClientInfo
+                client_info = ClientInfo(
+                    name=profile_data.get('name'),
+                    last_name=profile_data.get('last_name'),
+                    ragione_sociale=profile_data.get('ragione_sociale'),
+                    email=profile_data.get('email'),
+                    found_all_info=profile_data.get('found_all_info', False),
+                    what_is_missing=None  # Will be recalculated by validator
+                )
                 
-                logger.info(f"Loaded {len(self.profiles)} client profiles")
-            except Exception as e:
-                logger.error(f"Error loading profiles: {e}")
-                self.profiles = {}
+                # Create ClientProfile
+                self.profiles[phone] = ClientProfile(
+                    info=client_info,
+                    whatsapp_number=phone,
+                    conversation_id=profile_data.get('conversation_id', ''),
+                    created_at=datetime.fromisoformat(profile_data['created_at']) if profile_data.get('created_at') else datetime.now(),
+                    updated_at=datetime.fromisoformat(profile_data['updated_at']) if profile_data.get('updated_at') else datetime.now(),
+                    completed_at=datetime.fromisoformat(profile_data['completed_at']) if profile_data.get('completed_at') else None,
+                    hubspot_synced=profile_data.get('hubspot_synced', False),
+                    hubspot_contact_id=profile_data.get('hubspot_contact_id')
+                )
+            
+            logger.info(f"Loaded {len(self.profiles)} client profiles from database")
+        except Exception as e:
+            logger.error(f"Error loading profiles from database: {e}")
+            self.profiles = {}
     
     def save_profiles(self):
-        """Save client profiles to file"""
+        """Save client profiles to database"""
         try:
-            data = {}
             for phone, profile in self.profiles.items():
-                profile_dict = profile.dict()
-                # Convert datetime objects to strings
-                for date_field in ['created_at', 'updated_at', 'completed_at']:
-                    if profile_dict.get(date_field):
-                        profile_dict[date_field] = profile_dict[date_field].isoformat()
-                data[phone] = profile_dict
+                profile_data = {
+                    'name': profile.info.name,
+                    'last_name': profile.info.last_name,
+                    'ragione_sociale': profile.info.ragione_sociale,
+                    'email': profile.info.email,
+                    'conversation_id': profile.conversation_id,
+                    'hubspot_synced': profile.hubspot_synced,
+                    'hubspot_contact_id': profile.hubspot_contact_id
+                }
+                db.save_profile(phone, profile_data)
             
-            with open(self.profiles_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            logger.debug("Client profiles saved")
+            logger.debug("Client profiles saved to database")
         except Exception as e:
-            logger.error(f"Error saving profiles: {e}")
+            logger.error(f"Error saving profiles to database: {e}")
     
     def extract_client_info(self, message: str, current_info: Optional[ClientInfo] = None) -> ClientInfo:
         """

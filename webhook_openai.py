@@ -23,6 +23,7 @@ if sys.stdout.encoding != 'utf-8':
 from openai_conversation_manager import OpenAIConversationManager
 from data_extractor import DataExtractor
 from data_models import ClientInfo
+from database import db
 
 # Configure logging with UTF-8 support
 logging.basicConfig(
@@ -78,44 +79,6 @@ if OPENAI_API_KEY and OPENAI_PROMPT_ID:
 else:
     logger.warning("⚠️  OpenAI credentials not configured")
 
-# Message history storage
-message_history_file = "message_history.json"
-message_history = {}
-
-def load_message_history():
-    """Load message history from file"""
-    global message_history
-    if os.path.exists(message_history_file):
-        try:
-            with open(message_history_file, 'r', encoding='utf-8') as f:
-                message_history = json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading message history: {e}")
-            message_history = {}
-
-def save_message_history():
-    """Save message history to file"""
-    try:
-        with open(message_history_file, 'w', encoding='utf-8') as f:
-            json.dump(message_history, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Error saving message history: {e}")
-
-def add_message_to_history(phone, sender, message, timestamp=None):
-    """Add a message to history"""
-    if phone not in message_history:
-        message_history[phone] = []
-    
-    message_history[phone].append({
-        "sender": sender,  # 'user' or 'bot'
-        "message": message,
-        "timestamp": timestamp or datetime.now().isoformat()
-    })
-    save_message_history()
-
-# Load existing history on startup
-load_message_history()
-
 def send_whatsapp_message(to_number, message_text):
     """
     Send a WhatsApp message
@@ -146,8 +109,8 @@ def send_whatsapp_message(to_number, message_text):
         if response.status_code == 200:
             result = response.json()
             logger.info(f"✅ Message sent to +{to_number}")
-            # Add sent message to history
-            add_message_to_history(to_number, "bot", message_text)
+            # Add sent message to database
+            db.add_message(to_number, "bot", message_text)
             return True
         else:
             logger.error(f"Failed to send message: {response.text}")
@@ -265,8 +228,8 @@ def process_message(message, contacts):
         text = message.get('text', {}).get('body', '')
         logger.info(f"   Text: {text}")
         
-        # Add received message to history
-        add_message_to_history(msg_from, "user", text)
+        # Add received message to database
+        db.add_message(msg_from, "user", text)
         
         # Process with OpenAI
         handle_ai_conversation(msg_from, text, contact_name)
@@ -430,35 +393,7 @@ def api_get_conversations():
     """
     API endpoint to get all conversations with details
     """
-    conversations = {}
-    
-    # Get client profiles
-    if data_extractor:
-        for phone, profile in data_extractor.profiles.items():
-            conversations[phone] = {
-                'name': f"{profile.info.name} {profile.info.last_name}".strip() if profile.info.name or profile.info.last_name else None,
-                'email': profile.info.email,
-                'company': profile.info.ragione_sociale,
-                'last_message': '',
-                'last_timestamp': None
-            }
-    
-    # Add message history info
-    for phone, messages in message_history.items():
-        if phone not in conversations:
-            conversations[phone] = {
-                'name': None,
-                'email': None,
-                'company': None,
-                'last_message': '',
-                'last_timestamp': None
-            }
-        
-        if messages:
-            last_msg = messages[-1]
-            conversations[phone]['last_message'] = last_msg['message'][:50] + '...' if len(last_msg['message']) > 50 else last_msg['message']
-            conversations[phone]['last_timestamp'] = last_msg['timestamp']
-    
+    conversations = db.get_all_conversations_with_info()
     return jsonify(conversations)
 
 @app.route('/api/messages/<phone>')
@@ -466,7 +401,7 @@ def api_get_messages(phone):
     """
     API endpoint to get messages for a specific phone number
     """
-    messages = message_history.get(phone, [])
+    messages = db.get_messages(phone)
     return jsonify(messages)
 
 @app.route('/api/send', methods=['POST'])
@@ -489,14 +424,14 @@ def api_get_profile(phone):
     """
     API endpoint to get profile data for a phone number
     """
-    if data_extractor and phone in data_extractor.profiles:
-        profile = data_extractor.profiles[phone]
+    profile = db.get_profile(phone)
+    if profile:
         return jsonify({
-            'name': profile.info.name,
-            'last_name': profile.info.last_name,
-            'ragione_sociale': profile.info.ragione_sociale,
-            'email': profile.info.email,
-            'found_all_info': profile.info.found_all_info
+            'name': profile['name'],
+            'last_name': profile['last_name'],
+            'ragione_sociale': profile['ragione_sociale'],
+            'email': profile['email'],
+            'found_all_info': profile['found_all_info']
         })
     else:
         # Return empty profile if not found
@@ -519,20 +454,23 @@ def api_update_profile(phone):
     data = request.json
     
     try:
-        # Create or get existing profile
-        if phone not in data_extractor.profiles:
-            # Get conversation ID if exists
-            conversation_id = ai_manager.conversations.get(phone, 'manual_entry') if ai_manager else 'manual_entry'
-            profile = data_extractor.get_or_create_profile(phone, conversation_id)
+        # Update profile in database
+        success = db.update_profile_manually(phone, {
+            'name': data.get('name'),
+            'last_name': data.get('last_name'),
+            'ragione_sociale': data.get('ragione_sociale'),
+            'email': data.get('email')
+        })
         
-        # Update profile with manual data
-        success = data_extractor.update_profile_manually(
-            phone,
-            name=data.get('name'),
-            last_name=data.get('last_name'),
-            ragione_sociale=data.get('ragione_sociale'),
-            email=data.get('email')
-        )
+        # Also update in data_extractor if it exists
+        if data_extractor and phone in data_extractor.profiles:
+            data_extractor.update_profile_manually(
+                phone,
+                name=data.get('name'),
+                last_name=data.get('last_name'),
+                ragione_sociale=data.get('ragione_sociale'),
+                email=data.get('email')
+            )
         
         return jsonify({'success': success})
     except Exception as e:

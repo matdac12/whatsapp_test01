@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional
 from openai import OpenAI
+from database import db
 
 # Ensure UTF-8 encoding for stdout
 if sys.stdout.encoding != 'utf-8':
@@ -39,9 +40,8 @@ class OpenAIConversationManager:
             self.prompt_id = prompt_id.strip()
             self.model = model
             self.conversations: Dict[str, str] = {}  # whatsapp_user_id -> openai_conversation_id
-            self.conversations_file = "conversations.json"
             
-            # Load existing conversations from file
+            # Load existing conversations from database
             self.load_conversations()
             
             logger.info(f"OpenAI Conversation Manager initialized")
@@ -56,24 +56,23 @@ class OpenAIConversationManager:
             raise
     
     def load_conversations(self):
-        """Load existing conversations from file"""
-        if os.path.exists(self.conversations_file):
-            try:
-                with open(self.conversations_file, 'r', encoding='utf-8') as f:
-                    self.conversations = json.load(f)
-                logger.info(f"Loaded {len(self.conversations)} conversations from file")
-            except Exception as e:
-                logger.error(f"Error loading conversations: {e}")
-                self.conversations = {}
+        """Load existing conversations from database"""
+        try:
+            self.conversations = db.get_all_conversations()
+            logger.info(f"Loaded {len(self.conversations)} conversations from database")
+        except Exception as e:
+            logger.error(f"Error loading conversations from database: {e}")
+            self.conversations = {}
     
     def save_conversations(self):
-        """Save conversations to file for persistence"""
+        """Save conversations to database for persistence"""
         try:
-            with open(self.conversations_file, 'w', encoding='utf-8') as f:
-                json.dump(self.conversations, f, indent=2, ensure_ascii=False)
-            logger.debug("Conversations saved to file")
+            # Save all conversations to database
+            for user_id, conversation_id in self.conversations.items():
+                db.save_conversation(user_id, conversation_id)
+            logger.debug("Conversations saved to database")
         except Exception as e:
-            logger.error(f"Error saving conversations: {e}")
+            logger.error(f"Error saving conversations to database: {e}")
     
     def get_or_create_conversation(self, user_id: str, initial_message: Optional[str] = None) -> str:
         """
@@ -208,6 +207,7 @@ class OpenAIConversationManager:
                 
                 # Remove from our tracking
                 del self.conversations[user_id]
+                db.delete_conversation(user_id)
                 self.save_conversations()
                 
                 logger.info(f"Reset conversation for user {user_id}")
