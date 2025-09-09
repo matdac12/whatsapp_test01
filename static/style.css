@@ -1,0 +1,124 @@
+/* WhatsApp-style Dashboard CSS */
+
+body, html {
+    height: 100vh;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: #f8f9fa;
+}
+
+/* Contacts Sidebar */
+.contacts-sidebar {
+    background-color: white;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.contacts-list {
+    height: calc(100vh - 70px);
+    overflow-y: auto;
+}
+
+.contact-item {
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.contact-item:hover {
+    background-color: #f5f5f5;
+}
+
+.contact-item.active {
+    background-color: #e9ecef;
+}
+
+/* Chat Area */
+.chat-header {
+    height: 70px;
+}
+
+.messages-container {
+    background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAATElEQVQoU2NkYGD4z8DAwMiABBgZGZHFGEgwEKYQXREmh1OhkJAQVgVY3YkuhywGU4jPNciKsLkTXSGy3UgKsYUPTDW6YpwWYnMtABjSDwuL+mEHAAAAAElFTkSuQmCC');
+    background-repeat: repeat;
+    height: calc(100vh - 140px);
+    display: flex;
+    flex-direction: column;
+}
+
+/* Messages */
+.message {
+    margin-bottom: 10px;
+    display: flex;
+}
+
+.message.sent {
+    justify-content: flex-end;
+}
+
+.message.received {
+    justify-content: flex-start;
+}
+
+.message-bubble {
+    max-width: 70%;
+    padding: 8px 12px;
+    border-radius: 8px;
+    position: relative;
+    word-wrap: break-word;
+}
+
+.message.sent .message-bubble {
+    background-color: #dcf8c6;
+    margin-right: 10px;
+}
+
+.message.received .message-bubble {
+    background-color: white;
+    margin-left: 10px;
+    box-shadow: 0 1px 0.5px rgba(0,0,0,0.1);
+}
+
+.message-time {
+    font-size: 11px;
+    color: #667781;
+    display: block;
+    text-align: right;
+    margin-top: 2px;
+}
+
+/* Message Input */
+.message-input-container {
+    background-color: #f0f0f0;
+    min-height: 70px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .contacts-sidebar {
+        position: absolute;
+        z-index: 1000;
+        width: 100%;
+    }
+    
+    .message-bubble {
+        max-width: 85%;
+    }
+}

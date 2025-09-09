@@ -5,7 +5,7 @@ WhatsApp Webhook Server with OpenAI Integration
 Uses OpenAI's new Conversations and Responses API for intelligent chat
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import json
 import os
 import sys
@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Create Flask app
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # Configuration from environment
 PORT = int(os.environ.get('PORT', 3000))
@@ -78,6 +78,44 @@ if OPENAI_API_KEY and OPENAI_PROMPT_ID:
 else:
     logger.warning("⚠️  OpenAI credentials not configured")
 
+# Message history storage
+message_history_file = "message_history.json"
+message_history = {}
+
+def load_message_history():
+    """Load message history from file"""
+    global message_history
+    if os.path.exists(message_history_file):
+        try:
+            with open(message_history_file, 'r', encoding='utf-8') as f:
+                message_history = json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading message history: {e}")
+            message_history = {}
+
+def save_message_history():
+    """Save message history to file"""
+    try:
+        with open(message_history_file, 'w', encoding='utf-8') as f:
+            json.dump(message_history, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error saving message history: {e}")
+
+def add_message_to_history(phone, sender, message, timestamp=None):
+    """Add a message to history"""
+    if phone not in message_history:
+        message_history[phone] = []
+    
+    message_history[phone].append({
+        "sender": sender,  # 'user' or 'bot'
+        "message": message,
+        "timestamp": timestamp or datetime.now().isoformat()
+    })
+    save_message_history()
+
+# Load existing history on startup
+load_message_history()
+
 def send_whatsapp_message(to_number, message_text):
     """
     Send a WhatsApp message
@@ -108,6 +146,8 @@ def send_whatsapp_message(to_number, message_text):
         if response.status_code == 200:
             result = response.json()
             logger.info(f"✅ Message sent to +{to_number}")
+            # Add sent message to history
+            add_message_to_history(to_number, "bot", message_text)
             return True
         else:
             logger.error(f"Failed to send message: {response.text}")
@@ -224,6 +264,9 @@ def process_message(message, contacts):
     if msg_type == 'text':
         text = message.get('text', {}).get('body', '')
         logger.info(f"   Text: {text}")
+        
+        # Add received message to history
+        add_message_to_history(msg_from, "user", text)
         
         # Process with OpenAI
         handle_ai_conversation(msg_from, text, contact_name)
@@ -375,6 +418,72 @@ def get_conversations():
         'users': list(ai_manager.conversations.keys())
     }), 200
 
+@app.route('/dashboard')
+def dashboard():
+    """
+    Web dashboard for viewing conversations
+    """
+    return render_template('dashboard.html')
+
+@app.route('/api/conversations')
+def api_get_conversations():
+    """
+    API endpoint to get all conversations with details
+    """
+    conversations = {}
+    
+    # Get client profiles
+    if data_extractor:
+        for phone, profile in data_extractor.profiles.items():
+            conversations[phone] = {
+                'name': f"{profile.info.name} {profile.info.last_name}".strip() if profile.info.name or profile.info.last_name else None,
+                'email': profile.info.email,
+                'company': profile.info.ragione_sociale,
+                'last_message': '',
+                'last_timestamp': None
+            }
+    
+    # Add message history info
+    for phone, messages in message_history.items():
+        if phone not in conversations:
+            conversations[phone] = {
+                'name': None,
+                'email': None,
+                'company': None,
+                'last_message': '',
+                'last_timestamp': None
+            }
+        
+        if messages:
+            last_msg = messages[-1]
+            conversations[phone]['last_message'] = last_msg['message'][:50] + '...' if len(last_msg['message']) > 50 else last_msg['message']
+            conversations[phone]['last_timestamp'] = last_msg['timestamp']
+    
+    return jsonify(conversations)
+
+@app.route('/api/messages/<phone>')
+def api_get_messages(phone):
+    """
+    API endpoint to get messages for a specific phone number
+    """
+    messages = message_history.get(phone, [])
+    return jsonify(messages)
+
+@app.route('/api/send', methods=['POST'])
+def api_send_message():
+    """
+    API endpoint to send a manual message
+    """
+    data = request.json
+    phone = data.get('phone')
+    message = data.get('message')
+    
+    if not phone or not message:
+        return jsonify({'success': False, 'error': 'Missing phone or message'}), 400
+    
+    success = send_whatsapp_message(phone, message)
+    return jsonify({'success': success})
+
 if __name__ == '__main__':
     logger.info(f"\n🚀 WhatsApp OpenAI Bot Server")
     logger.info(f"=" * 50)
@@ -388,6 +497,7 @@ if __name__ == '__main__':
     logger.info(f"=" * 50)
     logger.info(f"Health check: http://localhost:{PORT}/health")
     logger.info(f"Conversations: http://localhost:{PORT}/conversations")
+    logger.info(f"Dashboard: http://localhost:{PORT}/dashboard")
     logger.info(f"=" * 50)
     logger.info(f"\n📝 Available Commands:")
     logger.info(f"  /reset - Reset conversation")
