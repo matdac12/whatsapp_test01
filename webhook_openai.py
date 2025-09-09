@@ -21,6 +21,8 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 from openai_conversation_manager import OpenAIConversationManager
+from data_extractor import DataExtractor
+from data_models import ClientInfo
 
 # Configure logging with UTF-8 support
 logging.basicConfig(
@@ -51,6 +53,8 @@ OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1')
 
 # Initialize OpenAI Conversation Manager
 ai_manager = None
+data_extractor = None
+
 if OPENAI_API_KEY and OPENAI_PROMPT_ID:
     try:
         ai_manager = OpenAIConversationManager(
@@ -59,9 +63,18 @@ if OPENAI_API_KEY and OPENAI_PROMPT_ID:
             model=OPENAI_MODEL
         )
         logger.info("✅ OpenAI Conversation Manager initialized successfully")
+        
+        # Initialize Data Extractor
+        data_extractor = DataExtractor(
+            api_key=OPENAI_API_KEY,
+            model="gpt-4o"  # Using gpt-4o for structured output parsing
+        )
+        logger.info("✅ Data Extractor initialized successfully")
+        
     except Exception as e:
         logger.error(f"❌ Failed to initialize OpenAI: {e}")
         ai_manager = None
+        data_extractor = None
 else:
     logger.warning("⚠️  OpenAI credentials not configured")
 
@@ -236,11 +249,11 @@ def process_message(message, contacts):
 
 def handle_ai_conversation(sender, text, contact_name):
     """
-    Handle conversation with OpenAI
+    Handle conversation with OpenAI and extract client data (dual-step)
     """
     # Check if AI manager is available
-    if not ai_manager:
-        logger.error("OpenAI manager not initialized")
+    if not ai_manager or not data_extractor:
+        logger.error("OpenAI manager or data extractor not initialized")
         send_whatsapp_message(sender, "I'm sorry, but I'm having technical difficulties. Please try again later.")
         return
     
@@ -249,24 +262,61 @@ def handle_ai_conversation(sender, text, contact_name):
         if text.strip().startswith('/'):
             command = text.strip()[1:].split()[0].lower()
             
-            # Handle special commands
+            # Add info command to show profile status
+            if command == 'info':
+                profile_status = data_extractor.get_profile_status(sender)
+                if profile_status:
+                    info_msg = f"📋 Il tuo profilo:\n"
+                    info_msg += f"Nome: {profile_status['data'].get('name', '❓')}\n"
+                    info_msg += f"Cognome: {profile_status['data'].get('last_name', '❓')}\n"
+                    info_msg += f"Azienda: {profile_status['data'].get('ragione_sociale', '❓')}\n"
+                    info_msg += f"Email: {profile_status['data'].get('email', '❓')}\n"
+                    if profile_status['missing']:
+                        info_msg += f"\n{profile_status['missing']}"
+                    send_whatsapp_message(sender, info_msg)
+                    return
+            
+            # Handle other special commands
             command_response = ai_manager.handle_command(sender, command)
             if command_response:
                 send_whatsapp_message(sender, command_response)
                 return
         
-        # Show typing indicator (by not sending immediately)
-        logger.info(f"🤖 Generating AI response for user {sender}")
+        logger.info(f"🤖 Processing message from {sender}")
         
-        # Generate AI response using the conversation manager
-        # This will maintain conversation context per user
-        ai_response = ai_manager.generate_response(sender, text)
+        # STEP 1: Extract client information from the message
+        conversation_id = ai_manager.get_or_create_conversation(sender, text)
+        client_info, is_newly_complete = data_extractor.process_message(sender, text, conversation_id)
         
-        # Send the AI response back to the user
+        # Log extraction results
+        logger.info(f"📝 Extraction: {data_extractor.format_extraction_summary(client_info)}")
+        
+        # STEP 2: Generate AI response with data request if needed
+        include_data_request = None
+        if not client_info.found_all_info:
+            include_data_request = client_info.get_friendly_request()
+            logger.info(f"📋 Requesting: {include_data_request}")
+        elif is_newly_complete:
+            # Inform AI that profile is now complete
+            include_data_request = f"Hai appena ricevuto tutti i dati del cliente: {client_info.name} {client_info.last_name} di {client_info.ragione_sociale} ({client_info.email}). Ringrazia per le informazioni e procedi ad aiutarlo."
+            logger.info(f"✅ Profile completed for {sender}")
+        
+        # Generate AI response (will include data request if provided)
+        ai_response = ai_manager.generate_response(sender, text, include_data_request)
+        
+        # STEP 3: Update conversation with extracted data if significant info was found
+        if any([client_info.name, client_info.last_name, client_info.ragione_sociale, client_info.email]):
+            # Update the conversation with extracted data
+            client_info_json = client_info.json(exclude={'found_all_info', 'what_is_missing'})
+            ai_manager.update_conversation_with_data(sender, client_info_json)
+        
+        # STEP 4: Send response to user
         if ai_response:
-            # Split long messages if needed (WhatsApp has a 4096 character limit)
+            # Let the AI handle the completion confirmation naturally
+            # No need to add our own confirmation message
+            
+            # Split long messages if needed
             if len(ai_response) > 4000:
-                # Split into chunks
                 chunks = [ai_response[i:i+4000] for i in range(0, len(ai_response), 4000)]
                 for chunk in chunks:
                     send_whatsapp_message(sender, chunk)
@@ -280,6 +330,8 @@ def handle_ai_conversation(sender, text, contact_name):
             
     except Exception as e:
         logger.error(f"Error in AI conversation: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         send_whatsapp_message(sender, "I encountered an error while processing your message. Please try again or type /reset to start over.")
 
 def process_status(status):

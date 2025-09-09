@@ -121,13 +121,14 @@ class OpenAIConversationManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
-    def generate_response(self, user_id: str, message: str) -> str:
+    def generate_response(self, user_id: str, message: str, include_data_request: Optional[str] = None) -> str:
         """
         Generate an AI response for a user message
         
         Args:
             user_id: WhatsApp user ID
             message: User's message text
+            include_data_request: Optional request for missing client data to include
             
         Returns:
             AI-generated response text
@@ -148,12 +149,23 @@ class OpenAIConversationManager:
             # Ensure message is properly encoded
             message_utf8 = message.encode('utf-8').decode('utf-8')
             
+            # Add data request to input if provided
+            input_messages = [{"role": "user", "content": message_utf8}]
+            
+            # If we need to request missing data, add it as context
+            if include_data_request:
+                # Add a system-like instruction to naturally request the missing info
+                input_messages.append({
+                    "role": "system", 
+                    "content": f"Mentre rispondi all'utente, includi naturalmente questa richiesta: {include_data_request}"
+                })
+            
             response = self.client.responses.create(
                 prompt={
                     "id": self.prompt_id
                     # No version specified to use default as per guide
                 },
-                input=[{"role": "user", "content": message_utf8}],
+                input=input_messages,
                 model=self.model,
                 conversation=conversation_id
                 # No stream parameter as we don't want streaming
@@ -234,6 +246,46 @@ class OpenAIConversationManager:
         except Exception as e:
             logger.error(f"Error getting conversation history: {e}")
             return None
+    
+    def update_conversation_with_data(self, user_id: str, client_info_json: str) -> bool:
+        """
+        Update the conversation with extracted client data
+        
+        Args:
+            user_id: WhatsApp user ID
+            client_info_json: JSON string of extracted client information
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if user_id not in self.conversations:
+                logger.warning(f"No conversation found for user {user_id}")
+                return False
+            
+            conversation_id = self.conversations[user_id]
+            
+            # Add the extracted data to the conversation as per the guide
+            items = self.client.conversations.items.create(
+                conversation_id,
+                items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text", 
+                            "text": f"[DATI CLIENTE ESTRATTI]: {client_info_json}"
+                        }],
+                    }
+                ],
+            )
+            
+            logger.info(f"Updated conversation {conversation_id} with extracted client data")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating conversation with data: {e}")
+            return False
     
     def handle_command(self, user_id: str, command: str) -> Optional[str]:
         """

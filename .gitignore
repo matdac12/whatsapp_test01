@@ -35,6 +35,9 @@ wheels/
 .ipynb_checkpoints
 *.ipynb_checkpoints/
 
+# Example notebook
+openAI_integration_examples.ipynb
+
 # IDE
 .vscode/
 .idea/
