@@ -6,6 +6,16 @@
 # Conversation data
 conversations.json
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Data files with PII
+message_history.json
+client_profiles.json
+profiles.json
+
 # Python
 __pycache__/
 *.py[cod]
