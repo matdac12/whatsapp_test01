@@ -166,11 +166,6 @@ curl http://localhost:3000/conversations
 python3 start_openai_bot.py
 ```
 
-### Send test message:
-```bash
-python3 send_whatsapp.py
-```
-
 ### Required packages:
 ```
 Flask>=2.3.0
