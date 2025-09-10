@@ -11,7 +11,7 @@ import sys
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from openai import OpenAI
 from database import db
 
@@ -120,14 +120,14 @@ class OpenAIConversationManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
-    def generate_response(self, user_id: str, message: str, include_data_request: Optional[str] = None) -> str:
+    def generate_response(self, user_id: str, message: str, prompt_variables: Optional[Dict[str, str]] = None) -> str:
         """
         Generate an AI response for a user message
         
         Args:
             user_id: WhatsApp user ID
             message: User's message text
-            include_data_request: Optional request for missing client data to include
+            prompt_variables: Optional dictionary of variables to pass to the prompt
             
         Returns:
             AI-generated response text
@@ -143,28 +143,24 @@ class OpenAIConversationManager:
             except:
                 logger.info(f"User message: [Contains special characters]")
             
-            # Generate response using the Responses API as per the guide
-            # Using the exact format from openAI_integration.md
+            # Log variables if provided
+            if prompt_variables:
+                logger.debug(f"Prompt variables: {prompt_variables}")
+            
             # Ensure message is properly encoded
             message_utf8 = message.encode('utf-8').decode('utf-8')
             
-            # Add data request to input if provided
-            input_messages = [{"role": "user", "content": message_utf8}]
+            # Build prompt configuration
+            prompt_config = {"id": self.prompt_id}
             
-            # If we need to request missing data, add it as context
-            if include_data_request:
-                # Add a system-like instruction to naturally request the missing info
-                input_messages.append({
-                    "role": "system", 
-                    "content": f"Mentre rispondi all'utente, includi naturalmente questa richiesta: {include_data_request}"
-                })
+            # Add variables if provided
+            if prompt_variables:
+                prompt_config["variables"] = prompt_variables
             
+            # Generate response using the Responses API
             response = self.client.responses.create(
-                prompt={
-                    "id": self.prompt_id
-                    # No version specified to use default as per guide
-                },
-                input=input_messages,
+                prompt=prompt_config,
+                input=[{"role": "user", "content": message_utf8}],
                 model=self.model,
                 conversation=conversation_id
                 # No stream parameter as we don't want streaming

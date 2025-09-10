@@ -290,25 +290,51 @@ def handle_ai_conversation(sender, text, contact_name):
         
         logger.info(f"🤖 Processing message from {sender}")
         
-        # STEP 1: Extract client information from the message
+        # STEP 1: Get conversation and check if profile is already complete
         conversation_id = ai_manager.get_or_create_conversation(sender, text)
-        client_info, is_newly_complete = data_extractor.process_message(sender, text, conversation_id)
         
-        # Log extraction results
-        logger.info(f"📝 Extraction: {data_extractor.format_extraction_summary(client_info)}")
+        # Check if we already have a complete profile
+        existing_profile = data_extractor.get_profile_status(sender)
         
-        # STEP 2: Generate AI response with data request if needed
-        include_data_request = None
-        if not client_info.found_all_info:
-            include_data_request = client_info.get_friendly_request()
-            logger.info(f"📋 Requesting: {include_data_request}")
-        elif is_newly_complete:
-            # Inform AI that profile is now complete
-            include_data_request = f"Hai appena ricevuto tutti i dati del cliente: {client_info.name} {client_info.last_name} di {client_info.ragione_sociale} ({client_info.email}). Ringrazia per le informazioni e procedi ad aiutarlo."
+        if existing_profile and existing_profile['complete']:
+            # Profile is already complete, no need to extract
+            logger.info(f"✅ Using complete profile for {sender}")
+            client_info = ClientInfo(
+                name=existing_profile['data']['name'],
+                last_name=existing_profile['data']['last_name'],
+                ragione_sociale=existing_profile['data']['ragione_sociale'],
+                email=existing_profile['data']['email'],
+                found_all_info=True,
+                what_is_missing=None
+            )
+            is_newly_complete = False
+        else:
+            # Profile incomplete or doesn't exist, proceed with extraction
+            client_info, is_newly_complete = data_extractor.process_message(sender, text, conversation_id)
+        
+        # Log current profile state
+        logger.info(f"📝 Profile status: {data_extractor.format_extraction_summary(client_info)}")
+        
+        # STEP 2: Prepare variables for prompt
+        prompt_variables = {
+            "client_name": client_info.name or "non_fornito",
+            "client_lastname": client_info.last_name or "non_fornito",
+            "client_company": client_info.ragione_sociale or "non_fornito",
+            "client_email": client_info.email or "non_fornito",
+            "completion_status": "Profilo completo ✅" if client_info.found_all_info else "Profilo incompleto 📝",
+            "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}"
+        }
+        
+        # Special handling for newly completed profiles
+        if is_newly_complete:
+            prompt_variables["completion_status"] = "Profilo appena completato! ✅"
+            prompt_variables["missing_fields_instruction"] = "Ringrazia il cliente per aver fornito tutte le informazioni."
             logger.info(f"✅ Profile completed for {sender}")
         
-        # Generate AI response (will include data request if provided)
-        ai_response = ai_manager.generate_response(sender, text, include_data_request)
+        logger.info(f"📝 Prompt variables: Status={prompt_variables['completion_status']}")
+        
+        # Generate AI response with variables
+        ai_response = ai_manager.generate_response(sender, text, prompt_variables)
         
         # STEP 3: Update conversation with extracted data if significant info was found
         if any([client_info.name, client_info.last_name, client_info.ragione_sociale, client_info.email]):
@@ -454,23 +480,17 @@ def api_update_profile(phone):
     data = request.json
     
     try:
-        # Update profile in database
-        success = db.update_profile_manually(phone, {
-            'name': data.get('name'),
-            'last_name': data.get('last_name'),
-            'ragione_sociale': data.get('ragione_sociale'),
-            'email': data.get('email')
-        })
+        # Update via data_extractor which will save to database
+        success = data_extractor.update_profile_manually(
+            phone,
+            name=data.get('name'),
+            last_name=data.get('last_name'),
+            ragione_sociale=data.get('ragione_sociale'),
+            email=data.get('email')
+        )
         
-        # Also update in data_extractor if it exists
-        if data_extractor and phone in data_extractor.profiles:
-            data_extractor.update_profile_manually(
-                phone,
-                name=data.get('name'),
-                last_name=data.get('last_name'),
-                ragione_sociale=data.get('ragione_sociale'),
-                email=data.get('email')
-            )
+        if success:
+            logger.info(f"Profile manually updated for {phone} via dashboard")
         
         return jsonify({'success': success})
     except Exception as e:

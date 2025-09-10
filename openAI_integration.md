@@ -119,3 +119,6 @@ response = client.responses.create(
 )
 
 print(response.output_text)
+
+please read this!!
+Okay, I know this method works, but I think I have another idea. In the new section I just added in the setup guide @SETUP_GUIDE.md    I explained to you how we can pass variables to the prompt and make it a dynamic prompt. My idea is to eliminate all this stuff you explained to me that we couldn't do and just adjust my prompt to pass it the relevant information by the user. If info is still none, okay, so it's not provided by the client, we make the prompt understand and so the system that gracefully needs to ask for it. If a user provides info at the next prompt, we pass it as information. In the field where we pass the variables, we can do: if none, put the actual value; if none, put a string; please ask for this or instruct in the prompt how to deal with a none. The current status of my prompt is this: I still have to add variables. I will do it with your help. I would like you to analyze the situation, provide feedback, and tell me if it's a good plan. Like this, we can just let the AI take care of the asking part. When all the info is gotten, the assistant can take care of actually helping the user. Current prompt: Sei un agente Whatsapp incaricato all'assistenza clienti e all'acquisizione delle informazioni di base del contatto.

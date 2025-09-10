@@ -29,64 +29,48 @@ class DataExtractor:
         """
         self.client = OpenAI(api_key=api_key)
         self.model = model
-        self.profiles: Dict[str, ClientProfile] = {}
-        
-        # Load existing profiles from database
-        self.load_profiles()
         
         logger.info(f"Data Extractor initialized with model: {self.model}")
-        logger.info(f"Loaded {len(self.profiles)} existing profiles")
     
-    def load_profiles(self):
-        """Load existing client profiles from database"""
-        try:
-            db_profiles = db.get_all_profiles()
-            for phone, profile_data in db_profiles.items():
-                # Convert database row to ClientInfo
-                client_info = ClientInfo(
-                    name=profile_data.get('name'),
-                    last_name=profile_data.get('last_name'),
-                    ragione_sociale=profile_data.get('ragione_sociale'),
-                    email=profile_data.get('email'),
-                    found_all_info=profile_data.get('found_all_info', False),
-                    what_is_missing=None  # Will be recalculated by validator
-                )
-                
-                # Create ClientProfile
-                self.profiles[phone] = ClientProfile(
-                    info=client_info,
-                    whatsapp_number=phone,
-                    conversation_id=profile_data.get('conversation_id', ''),
-                    created_at=datetime.fromisoformat(profile_data['created_at']) if profile_data.get('created_at') else datetime.now(),
-                    updated_at=datetime.fromisoformat(profile_data['updated_at']) if profile_data.get('updated_at') else datetime.now(),
-                    completed_at=datetime.fromisoformat(profile_data['completed_at']) if profile_data.get('completed_at') else None,
-                    hubspot_synced=profile_data.get('hubspot_synced', False),
-                    hubspot_contact_id=profile_data.get('hubspot_contact_id')
-                )
-            
-            logger.info(f"Loaded {len(self.profiles)} client profiles from database")
-        except Exception as e:
-            logger.error(f"Error loading profiles from database: {e}")
-            self.profiles = {}
+    def _calculate_what_is_missing(self, name, last_name, ragione_sociale, email):
+        """Calculate what information is missing from a profile"""
+        missing = []
+        if not name:
+            missing.append('nome')
+        if not last_name:
+            missing.append('cognome')
+        if not ragione_sociale:
+            missing.append('ragione sociale (azienda)')
+        if not email:
+            missing.append('indirizzo email')
+        
+        if missing:
+            if len(missing) == 1:
+                return f"Manca ancora: {missing[0]}"
+            else:
+                return f"Mancano ancora: {', '.join(missing[:-1])} e {missing[-1]}"
+        return None
     
-    def save_profiles(self):
-        """Save client profiles to database"""
-        try:
-            for phone, profile in self.profiles.items():
-                profile_data = {
-                    'name': profile.info.name,
-                    'last_name': profile.info.last_name,
-                    'ragione_sociale': profile.info.ragione_sociale,
-                    'email': profile.info.email,
-                    'conversation_id': profile.conversation_id,
-                    'hubspot_synced': profile.hubspot_synced,
-                    'hubspot_contact_id': profile.hubspot_contact_id
-                }
-                db.save_profile(phone, profile_data)
-            
-            logger.debug("Client profiles saved to database")
-        except Exception as e:
-            logger.error(f"Error saving profiles to database: {e}")
+    def _create_client_info_from_db(self, profile_data: Dict) -> ClientInfo:
+        """Create ClientInfo object from database data"""
+        if not profile_data:
+            return ClientInfo()
+        
+        what_is_missing = self._calculate_what_is_missing(
+            profile_data.get('name'),
+            profile_data.get('last_name'),
+            profile_data.get('ragione_sociale'),
+            profile_data.get('email')
+        )
+        
+        return ClientInfo(
+            name=profile_data.get('name'),
+            last_name=profile_data.get('last_name'),
+            ragione_sociale=profile_data.get('ragione_sociale'),
+            email=profile_data.get('email'),
+            found_all_info=bool(profile_data.get('found_all_info', False)),
+            what_is_missing=what_is_missing
+        )
     
     def extract_client_info(self, message: str, current_info: Optional[ClientInfo] = None) -> ClientInfo:
         """
@@ -146,9 +130,10 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
                 if not extracted_info.email:
                     extracted_info.email = current_info.email
             
-            logger.info(f"Extracted info - Complete: {extracted_info.found_all_info}")
-            if extracted_info.what_is_missing:
-                logger.info(f"Missing: {extracted_info.what_is_missing}")
+            # Log the FINAL merged state, not just extraction
+            logger.info(f"Profile after extraction - Complete: {extracted_info.found_all_info}")
+            if not extracted_info.found_all_info:
+                logger.info(f"Still missing: {extracted_info.what_is_missing}")
             
             return extracted_info
             
@@ -168,12 +153,28 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
         Returns:
             ClientProfile object
         """
-        if whatsapp_number in self.profiles:
-            profile = self.profiles[whatsapp_number]
+        # Try to get from database
+        profile_data = db.get_profile(whatsapp_number)
+        
+        if profile_data:
+            # Create ClientProfile from database data
+            client_info = self._create_client_info_from_db(profile_data)
+            
+            profile = ClientProfile(
+                info=client_info,
+                whatsapp_number=whatsapp_number,
+                conversation_id=conversation_id,
+                created_at=datetime.fromisoformat(profile_data['created_at']) if profile_data.get('created_at') else datetime.now(),
+                updated_at=datetime.fromisoformat(profile_data['updated_at']) if profile_data.get('updated_at') else datetime.now(),
+                completed_at=datetime.fromisoformat(profile_data['completed_at']) if profile_data.get('completed_at') else None,
+                hubspot_synced=profile_data.get('hubspot_synced', False),
+                hubspot_contact_id=profile_data.get('hubspot_contact_id')
+            )
+            
             # Update conversation ID if different
-            if profile.conversation_id != conversation_id:
-                profile.conversation_id = conversation_id
-                profile.updated_at = datetime.now()
+            if profile_data.get('conversation_id') != conversation_id:
+                db.save_profile(whatsapp_number, {'conversation_id': conversation_id})
+            
             return profile
         
         # Create new profile
@@ -182,8 +183,18 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
             whatsapp_number=whatsapp_number,
             conversation_id=conversation_id
         )
-        self.profiles[whatsapp_number] = profile
-        self.save_profiles()
+        
+        # Save new profile to database
+        profile_data = {
+            'name': None,
+            'last_name': None,
+            'ragione_sociale': None,
+            'email': None,
+            'conversation_id': conversation_id,
+            'hubspot_synced': False,
+            'hubspot_contact_id': None
+        }
+        db.save_profile(whatsapp_number, profile_data)
         
         logger.info(f"Created new profile for {whatsapp_number}")
         return profile
@@ -199,20 +210,45 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
         Returns:
             Updated ClientProfile
         """
-        if whatsapp_number not in self.profiles:
+        # Get existing profile from database
+        existing_data = db.get_profile(whatsapp_number)
+        if not existing_data:
             logger.error(f"Profile not found for {whatsapp_number}")
             raise ValueError(f"Profile not found for {whatsapp_number}")
         
-        profile = self.profiles[whatsapp_number]
-        profile.info = new_info
-        profile.updated_at = datetime.now()
+        # Check if newly complete
+        was_complete = bool(existing_data.get('found_all_info', False))
+        is_newly_complete = not was_complete and new_info.found_all_info
         
-        # Mark as complete if all info found
-        if new_info.found_all_info and not profile.completed_at:
-            profile.mark_complete()
+        # Save to database
+        profile_data = {
+            'name': new_info.name,
+            'last_name': new_info.last_name,
+            'ragione_sociale': new_info.ragione_sociale,
+            'email': new_info.email,
+            'conversation_id': existing_data.get('conversation_id'),
+            'hubspot_synced': existing_data.get('hubspot_synced', False),
+            'hubspot_contact_id': existing_data.get('hubspot_contact_id')
+        }
+        db.save_profile(whatsapp_number, profile_data)
+        
+        if is_newly_complete:
             logger.info(f"Profile completed for {whatsapp_number}: {new_info.to_display_string()}")
         
-        self.save_profiles()
+        logger.debug(f"Profile saved to database for {whatsapp_number}")
+        
+        # Create and return ClientProfile object
+        profile = ClientProfile(
+            info=new_info,
+            whatsapp_number=whatsapp_number,
+            conversation_id=existing_data.get('conversation_id', ''),
+            created_at=datetime.fromisoformat(existing_data['created_at']) if existing_data.get('created_at') else datetime.now(),
+            updated_at=datetime.now(),
+            completed_at=datetime.now() if is_newly_complete else (datetime.fromisoformat(existing_data['completed_at']) if existing_data.get('completed_at') else None),
+            hubspot_synced=existing_data.get('hubspot_synced', False),
+            hubspot_contact_id=existing_data.get('hubspot_contact_id')
+        )
+        
         return profile
     
     def process_message(self, whatsapp_number: str, message: str, conversation_id: str) -> Tuple[ClientInfo, bool]:
@@ -261,56 +297,57 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
             True if successful, False otherwise
         """
         try:
-            if whatsapp_number not in self.profiles:
-                logger.error(f"Profile not found for {whatsapp_number}")
-                return False
+            # Get existing profile from database or create new
+            existing_data = db.get_profile(whatsapp_number)
             
-            profile = self.profiles[whatsapp_number]
+            # Prepare updated data
+            if existing_data:
+                # Start with existing data
+                updated_data = {
+                    'name': existing_data.get('name'),
+                    'last_name': existing_data.get('last_name'),
+                    'ragione_sociale': existing_data.get('ragione_sociale'),
+                    'email': existing_data.get('email'),
+                    'conversation_id': existing_data.get('conversation_id'),
+                    'hubspot_synced': existing_data.get('hubspot_synced', False),
+                    'hubspot_contact_id': existing_data.get('hubspot_contact_id')
+                }
+            else:
+                # Create new profile data
+                updated_data = {
+                    'name': None,
+                    'last_name': None,
+                    'ragione_sociale': None,
+                    'email': None,
+                    'conversation_id': '',
+                    'hubspot_synced': False,
+                    'hubspot_contact_id': None
+                }
             
             # Update fields if provided
             if name is not None:
-                profile.info.name = name if name.strip() else None
+                updated_data['name'] = name.strip() if name.strip() else None
             if last_name is not None:
-                profile.info.last_name = last_name if last_name.strip() else None
+                updated_data['last_name'] = last_name.strip() if last_name.strip() else None
             if ragione_sociale is not None:
-                profile.info.ragione_sociale = ragione_sociale if ragione_sociale.strip() else None
+                updated_data['ragione_sociale'] = ragione_sociale.strip() if ragione_sociale.strip() else None
             if email is not None:
-                profile.info.email = email if email.strip() else None
+                updated_data['email'] = email.strip() if email.strip() else None
             
-            # Recalculate completeness
-            profile.info.found_all_info = all([
-                profile.info.name,
-                profile.info.last_name,
-                profile.info.ragione_sociale,
-                profile.info.email
+            # Save to database (database will handle found_all_info flag)
+            db.save_profile(whatsapp_number, updated_data)
+            
+            # Check if profile is now complete
+            is_complete = all([
+                updated_data['name'],
+                updated_data['last_name'],
+                updated_data['ragione_sociale'],
+                updated_data['email']
             ])
             
-            # Update what_is_missing
-            missing = []
-            if not profile.info.name:
-                missing.append('nome')
-            if not profile.info.last_name:
-                missing.append('cognome')
-            if not profile.info.ragione_sociale:
-                missing.append('ragione sociale (azienda)')
-            if not profile.info.email:
-                missing.append('indirizzo email')
-            
-            if missing:
-                if len(missing) == 1:
-                    profile.info.what_is_missing = f"Manca ancora: {missing[0]}"
-                else:
-                    profile.info.what_is_missing = f"Mancano ancora: {', '.join(missing[:-1])} e {missing[-1]}"
-            else:
-                profile.info.what_is_missing = None
-            
-            # Update timestamps
-            profile.updated_at = datetime.now()
-            if profile.info.found_all_info and not profile.completed_at:
-                profile.mark_complete()
+            if is_complete:
                 logger.info(f"Profile manually completed for {whatsapp_number}")
             
-            self.save_profiles()
             logger.info(f"Profile manually updated for {whatsapp_number}")
             return True
             
@@ -328,17 +365,26 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
         Returns:
             Dictionary with profile status or None if not found
         """
-        if whatsapp_number not in self.profiles:
+        # Get from database
+        profile_data = db.get_profile(whatsapp_number)
+        if not profile_data:
             return None
         
-        profile = self.profiles[whatsapp_number]
+        # Create ClientInfo to get display string and missing info
+        client_info = self._create_client_info_from_db(profile_data)
+        
         return {
-            "complete": profile.info.found_all_info,
-            "display_name": profile.info.to_display_string(),
-            "missing": profile.info.what_is_missing,
-            "data": profile.info.dict(exclude={'found_all_info', 'what_is_missing'}),
-            "created_at": profile.created_at.isoformat(),
-            "completed_at": profile.completed_at.isoformat() if profile.completed_at else None
+            "complete": bool(profile_data.get('found_all_info', False)),
+            "display_name": client_info.to_display_string(),
+            "missing": client_info.what_is_missing,
+            "data": {
+                'name': profile_data.get('name'),
+                'last_name': profile_data.get('last_name'),
+                'ragione_sociale': profile_data.get('ragione_sociale'),
+                'email': profile_data.get('email')
+            },
+            "created_at": profile_data.get('created_at'),
+            "completed_at": profile_data.get('completed_at')
         }
     
     def format_extraction_summary(self, info: ClientInfo) -> str:
