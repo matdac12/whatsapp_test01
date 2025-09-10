@@ -9,11 +9,14 @@ This project creates an intelligent WhatsApp chatbot that uses OpenAI's new Conv
 1. **WhatsApp Business API** - Sends/receives messages via Meta's Cloud API
 2. **Webhook Server** (Flask) - Receives WhatsApp messages via webhooks
 3. **OpenAI Conversations API** - Maintains conversation context per user
-4. **ngrok** - Exposes local server to internet for WhatsApp webhooks
+4. **SQLite Database** - Stores all conversations, messages, and client profiles
+5. **ngrok** - Exposes local server to internet for WhatsApp webhooks
 
 ### Key Files:
 - `webhook_openai.py` - Main webhook server that processes WhatsApp messages
 - `openai_conversation_manager.py` - Manages OpenAI conversations per user
+- `data_extractor.py` - Extracts structured client data (name, email, company) from messages
+- `database.py` - SQLite database manager for all data persistence
 - `start_openai_bot.py` - Startup script that loads environment variables
 - `.env` - Contains all API credentials
 
@@ -58,7 +61,7 @@ This project creates an intelligent WhatsApp chatbot that uses OpenAI's new Conv
 ### Special Commands:
 - `/reset` - Starts a new conversation
 - `/history` - Shows recent conversation history
-- `/info` - Displays bot information
+- `/info` - Displays client profile information (WhatsApp command)
 
 ## 🚀 Deployment Instructions
 
@@ -133,13 +136,19 @@ curl http://localhost:3000/conversations
 /Progetto Whatsapp/
 ├── webhook_openai.py           # Main webhook server
 ├── openai_conversation_manager.py # OpenAI conversation handler
-├── start_openai_bot.py         # Startup script
-├── .env                        # API credentials
-├── conversations.json          # Persistent conversation storage
-├── requirements.txt            # Python dependencies
-├── send_whatsapp.py           # Utility to send messages
-├── whatsapp_sender.py         # CLI message sender
-└── LOCAL_DEPLOYMENT_GUIDE.md  # Setup instructions
+├── data_extractor.py          # Client data extraction with AI
+├── data_models.py             # Pydantic models for structured data
+├── database.py                # SQLite database manager
+├── start_openai_bot.py        # Startup script
+├── templates/
+│   └── dashboard.html         # Web interface for conversations
+├── static/
+│   └── style.css             # WhatsApp-style CSS
+├── whatsapp_bot.db           # SQLite database file (auto-created)
+├── .env                       # API credentials
+├── requirements.txt           # Python dependencies
+├── SETUP_GUIDE_clean.md      # Client setup documentation
+└── CONVERSATION_MANAGEMENT_TODO.md # Future conversation rotation plan
 ```
 
 ## 🔄 Future Improvements
@@ -167,8 +176,69 @@ python3 send_whatsapp.py
 Flask>=2.3.0
 requests>=2.31.0
 openai>=1.0.0
+pydantic>=2.0.0
+email-validator>=2.0.0
 ```
 
+## 🎉 Major Updates (January 9, 2025)
+
+### 1. **Dual-Step Data Extraction System**
+- Implemented automatic extraction of client information (Name, Last Name, Company, Email)
+- Uses OpenAI's `responses.parse()` API for structured data extraction
+- AI naturally requests missing information while maintaining conversation flow
+- Profile completion tracking with Italian language support
+
+### 2. **Web Dashboard Implementation** 
+- Created WhatsApp-style web interface at `localhost:3000/dashboard`
+- Left sidebar shows all conversations with client info
+- Right panel displays chat history with green/gray message bubbles
+- Auto-refresh every 5 seconds for real-time updates
+- Accessible from any device on local network
+
+### 3. **Edit Contact Feature**
+- Click on any contact name to open edit modal
+- Manually input/update client information
+- Saves to database and updates AI behavior (won't ask for saved info)
+- Bootstrap modal with save confirmation
+
+### 4. **SQLite Database Migration**
+- Migrated from JSON files to SQLite for production scalability
+- Three main tables: conversations, client_profiles, messages
+- Thread-safe connection pooling
+- Indexed queries for performance
+- Handles concurrent access and millions of messages
+
+### 5. **Important Learnings**
+
+#### API Corrections:
+- Use `responses.parse()` not `beta.chat.completions.parse()` for extraction
+- Use `text_format` parameter, not `response_format`
+- WhatsApp API v22.0 works, v21.0 has issues
+
+#### Data Flow:
+1. Message arrives → Save to database
+2. Extract client data → Update profile
+3. Generate AI response with data request if needed
+4. Send response → Update conversation
+
+#### Dashboard Access Options:
+- **Option A (Implemented)**: Local network access only
+- **Option B (Future)**: Internet access with authentication
+
+### 6. **Future Conversation Management Plan**
+- Created `CONVERSATION_MANAGEMENT_TODO.md` for 48-hour conversation rotation
+- Will implement conversation summaries to reduce API costs by 70-80%
+- Maintains full history in database while limiting OpenAI context
+
+## 📊 Current System Capabilities
+
+- **Handles**: Unlimited concurrent users
+- **Stores**: Complete message history in SQLite
+- **Extracts**: Client data automatically in Italian
+- **Dashboard**: Real-time conversation monitoring
+- **Manual Control**: Edit client info, send manual messages
+- **Performance**: Production-ready with database backend
+
 ---
-*Last updated: September 2025*
-*This bot uses OpenAI's new Conversations API for persistent, context-aware chat*
+*Last updated: January 9, 2025*
+*System now production-ready with SQLite, web dashboard, and automated data extraction*

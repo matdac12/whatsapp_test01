@@ -100,3 +100,22 @@ items = client.conversations.items.create(
   ],
 )
 print(items.data)
+
+
+USING VARIABLES
+
+We can add variables in the system prompt, and when we create a response from the API we can set those values like this
+
+response = client.responses.create(
+  prompt={
+    "id": 'pmpt_68c132ddf7c08196bba39f8e02a7028e0c7bdc9c964d1940',
+    "variables": {
+            "name": "Jane Doe",
+            "age": "40"
+        }
+  },
+  input=[{ "role": "user", "content": "Hello friend" }],
+  model="gpt-4.1"
+)
+
+print(response.output_text)
