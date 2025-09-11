@@ -107,6 +107,10 @@
         let conversations = {};
         let contactsQuery = '';
         let composerInitialized = false;
+        // Incremental update state
+        const lastKnownTsByPhone = {};
+        const renderedCountByPhone = {};
+        const lastDayKeyByPhone = {};
 
         function initComposerListeners() {
             if (composerInitialized) return;
@@ -168,7 +172,11 @@
                     updateContactsList();
                     if (contactsList) contactsList.removeAttribute('aria-busy');
                     if (currentPhone) {
-                        loadMessages(currentPhone);
+                        const newTs = conversations[currentPhone] ? conversations[currentPhone].last_timestamp : null;
+                        if (renderedCountByPhone[currentPhone] != null && newTs && lastKnownTsByPhone[currentPhone] !== newTs) {
+                            loadMessages(currentPhone, false, true); // incremental append
+                        }
+                        if (newTs) lastKnownTsByPhone[currentPhone] = newTs;
                     }
                 })
                 .catch(error => console.error('Error loading conversations:', error));
@@ -288,16 +296,20 @@
             if (el) el.classList.add('active');
         }
         
-        function loadMessages(phone, showSkeleton = false) {
+        function loadMessages(phone, showSkeleton = false, incremental = false) {
             const container = document.getElementById('messagesContainer');
-            if (showSkeleton && container) {
+            if (showSkeleton && container && !incremental) {
                 container.setAttribute('aria-busy', 'true');
                 container.innerHTML = renderMessagesSkeleton();
             }
             fetch(`/api/messages/${phone}`)
                 .then(response => response.json())
                 .then(messages => {
-                    displayMessages(messages);
+                    if (incremental && renderedCountByPhone[phone] != null) {
+                        appendNewMessages(messages);
+                    } else {
+                        displayMessages(messages);
+                    }
                 })
                 .catch(error => console.error('Error loading messages:', error))
                 .finally(() => { if (container) container.removeAttribute('aria-busy'); });
@@ -392,7 +404,69 @@
                 container.appendChild(messageDiv);
             });
 
+            // Track rendered count and last day key for incremental appends
+            renderedCountByPhone[currentPhone] = messages.length;
+            lastDayKeyByPhone[currentPhone] = currentDay;
+
             // Scroll to bottom (smooth, respecting reduced motion)
+            const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (prefersReduced) {
+                container.scrollTop = container.scrollHeight;
+            } else {
+                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            }
+        }
+
+        // Append only new messages without re-rendering the entire list
+        function appendNewMessages(messages) {
+            const container = document.getElementById('messagesContainer');
+            const start = renderedCountByPhone[currentPhone] || 0;
+            if (!messages || messages.length <= start) return;
+
+            // Local helpers (duplication kept for clarity and isolation)
+            const dk = (d) => {
+                const dt = new Date(d);
+                return `${dt.getFullYear()}-${(dt.getMonth()+1).toString().padStart(2,'0')}-${dt.getDate().toString().padStart(2,'0')}`;
+            };
+            const dayLabel = (d) => {
+                const dt = new Date(d);
+                const today = new Date(); today.setHours(0,0,0,0);
+                const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+                const midnight = new Date(dt); midnight.setHours(0,0,0,0);
+                if (midnight.getTime() === today.getTime()) return 'Oggi';
+                if (midnight.getTime() === yesterday.getTime()) return 'Ieri';
+                return new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' }).format(dt);
+            };
+
+            let currentDay = lastDayKeyByPhone[currentPhone] || null;
+
+            messages.slice(start).forEach(msg => {
+                const key = dk(msg.timestamp);
+                if (key !== currentDay) {
+                    currentDay = key;
+                    const sep = document.createElement('div');
+                    sep.className = 'day-separator';
+                    sep.setAttribute('data-label', dayLabel(msg.timestamp));
+                    container.appendChild(sep);
+                }
+
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${msg.sender === 'bot' ? 'sent' : 'received'} appear`;
+                const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
+                messageDiv.innerHTML = `
+                    <div class="message-bubble">
+                        <div>${msg.message}</div>
+                        <small class="message-time">${time}</small>
+                    </div>
+                `;
+                container.appendChild(messageDiv);
+            });
+
+            // Update counters
+            renderedCountByPhone[currentPhone] = messages.length;
+            lastDayKeyByPhone[currentPhone] = dk(messages[messages.length - 1].timestamp);
+
+            // Smooth scroll to bottom (respect reduced motion)
             const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             if (prefersReduced) {
                 container.scrollTop = container.scrollHeight;
@@ -423,7 +497,7 @@
                 if (data.success) {
                     input.value = '';
                     input.style.height = 'auto';
-                    loadMessages(currentPhone);
+                    loadMessages(currentPhone, false, true);
                 } else {
                     alert('Errore nell\'invio del messaggio');
                 }
