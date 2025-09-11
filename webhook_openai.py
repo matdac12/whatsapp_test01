@@ -403,7 +403,8 @@ def handle_ai_conversation(sender, text, contact_name):
             "client_company": client_info.ragione_sociale or "non_fornito",
             "client_email": client_info.email or "non_fornito",
             "completion_status": "Profilo completo ✅" if client_info.found_all_info else "Profilo incompleto 📝",
-            "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}"
+            "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}",
+            "agent_notes": ""  # Empty by default, will be used for manual mode regeneration
         }
         
         # Special handling for newly completed profiles

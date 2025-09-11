@@ -42,11 +42,12 @@ This project creates an intelligent WhatsApp chatbot that uses OpenAI's new Conv
 1. **Create Conversation**: `client.conversations.create()` - Creates a new conversation thread
 2. **Generate Response**: `client.responses.create()` with:
    - `prompt.id`: Your specific prompt ID
+   - `prompt.variables`: Optional variables to pass to prompt (e.g., `{"agent_notes": ""}`)
    - `input`: User's message
    - `model`: gpt-4.1
    - `conversation`: Conversation ID for context
    - No streaming (for WhatsApp compatibility)
-3. **Conversation Persistence**: Conversation IDs saved to `conversations.json`
+3. **Conversation Persistence**: Conversation IDs saved to database
 
 ### Message Flow:
 1. User sends WhatsApp message → 
@@ -347,6 +348,43 @@ RETRY_BACKOFF = [1, 2, 4]  # Progressive wait between retries
 - Normal operation unchanged
 - Timeouts now fail cleanly after max 10 seconds
 - Retry attempts logged for debugging
+
+## 🔧 Prompt Variables Support
+
+### Agent Notes Variable
+The system now supports passing `agent_notes` as a prompt variable for manual mode regeneration:
+
+**Implementation in `openai_conversation_manager.py`:**
+```python
+def generate_response(self, user_id: str, message: str, prompt_variables: Optional[Dict[str, str]] = None) -> str:
+    # Example usage for manual mode regeneration:
+    # prompt_variables = {"agent_notes": "Customer is VIP, prioritize their request"}
+    
+    prompt_config = {"id": self.prompt_id}
+    if prompt_variables:
+        prompt_config["variables"] = prompt_variables
+    
+    response = self.client.responses.create(
+        prompt=prompt_config,
+        input=[{"role": "user", "content": message}],
+        model=self.model,
+        conversation=conversation_id
+    )
+```
+
+**IMPORTANT**: The `agent_notes` variable is REQUIRED in all prompt variable dictionaries. 
+Always include it, even as an empty string:
+```python
+prompt_variables = {
+    "client_name": "...",
+    "client_lastname": "...",
+    # ... other variables ...
+    "agent_notes": ""  # REQUIRED - prevents OpenAI API errors
+}
+```
+
+Without this variable, the OpenAI API will throw an error if the prompt template expects it.
+For manual mode regeneration, this will be populated with agent instructions.
 
 ## 🚀 September 11, 2025 Improvements
 
