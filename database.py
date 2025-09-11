@@ -86,6 +86,15 @@ class DatabaseManager:
                 )
             """)
             
+            # Processed messages table for deduplication
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    phone_number TEXT NOT NULL,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_phone 
@@ -95,6 +104,12 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_timestamp 
                 ON messages(timestamp)
+            """)
+            
+            # Index for cleanup of old processed messages
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_processed_messages_timestamp 
+                ON processed_messages(processed_at)
             """)
             
             conn.commit()
@@ -117,9 +132,13 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO conversations 
-                (phone_number, conversation_id, updated_at) 
-                VALUES (?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO conversations 
+                (phone_number, conversation_id, created_at, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(phone_number) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    updated_at = CURRENT_TIMESTAMP
+                    -- created_at is NOT updated, preserves original
             """, (phone_number, conversation_id))
     
     def get_all_conversations(self) -> Dict[str, str]:
@@ -167,11 +186,27 @@ class DatabaseManager:
             completed_at = datetime.now() if found_all_info else None
             
             cursor.execute("""
-                INSERT OR REPLACE INTO client_profiles 
+                INSERT INTO client_profiles 
                 (phone_number, name, last_name, ragione_sociale, email, 
-                 found_all_info, conversation_id, updated_at, completed_at,
+                 found_all_info, conversation_id, created_at, updated_at, completed_at,
                  hubspot_synced, hubspot_contact_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?)
+                ON CONFLICT(phone_number) DO UPDATE SET
+                    name = COALESCE(excluded.name, name),
+                    last_name = COALESCE(excluded.last_name, last_name),
+                    ragione_sociale = COALESCE(excluded.ragione_sociale, ragione_sociale),
+                    email = COALESCE(excluded.email, email),
+                    found_all_info = excluded.found_all_info,
+                    conversation_id = COALESCE(excluded.conversation_id, conversation_id),
+                    updated_at = CURRENT_TIMESTAMP,
+                    completed_at = CASE 
+                        WHEN excluded.found_all_info = 1 AND completed_at IS NULL 
+                        THEN excluded.completed_at 
+                        ELSE completed_at 
+                    END,
+                    hubspot_synced = excluded.hubspot_synced,
+                    hubspot_contact_id = excluded.hubspot_contact_id
+                    -- created_at is preserved
             """, (
                 phone_number,
                 profile_data.get('name'),
@@ -252,6 +287,39 @@ class DatabaseManager:
             return False
     
     # === Message Methods ===
+    
+    # === Message Deduplication Methods ===
+    
+    def is_message_processed(self, message_id: str) -> bool:
+        """Check if a WhatsApp message ID has already been processed"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM processed_messages WHERE message_id = ?",
+                (message_id,)
+            )
+            return cursor.fetchone() is not None
+    
+    def mark_message_processed(self, message_id: str, phone_number: str):
+        """Mark a WhatsApp message as processed to prevent duplicates"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO processed_messages (message_id, phone_number)
+                VALUES (?, ?)
+            """, (message_id, phone_number))
+    
+    def cleanup_old_processed_messages(self, days_to_keep: int = 7) -> int:
+        """Delete processed message records older than specified days"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM processed_messages 
+                WHERE processed_at < datetime('now', '-' || ? || ' days')
+            """, (days_to_keep,))
+            deleted_count = cursor.rowcount
+            logger.info(f"Cleaned up {deleted_count} old processed message records")
+            return deleted_count
     
     def add_message(self, phone_number: str, sender: str, message: str, timestamp: Optional[str] = None):
         """Add a message to history"""

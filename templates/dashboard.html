@@ -14,7 +14,8 @@
             <!-- Left Sidebar - Contact List -->
             <div class="col-md-4 col-lg-3 border-end p-0 contacts-sidebar">
                 <div class="bg-light p-3 border-bottom">
-                    <h5 class="mb-0">Conversazioni</h5>
+                    <h5 class="mb-2">Conversazioni</h5>
+                    <input type="text" id="contactsSearch" class="form-control form-control-sm contacts-search" placeholder="Cerca nome, azienda, telefono…" autocomplete="off">
                 </div>
                 <div class="contacts-list" id="contactsList">
                     <!-- Contacts will be loaded here -->
@@ -46,8 +47,8 @@
                 <!-- Message Input -->
                 <div class="border-top p-3 message-input-container" id="messageInputContainer" style="display: none;">
                     <div class="input-group">
-                        <input type="text" class="form-control" id="messageInput" placeholder="Scrivi un messaggio..." onkeypress="if(event.key==='Enter') sendMessage()">
-                        <button class="btn btn-success" onclick="sendMessage()">Invia</button>
+                        <textarea rows="1" class="form-control" id="messageInput" placeholder="Scrivi un messaggio…"></textarea>
+                        <button class="btn btn-success" id="sendButton" onclick="sendMessage()" disabled>Invia</button>
                     </div>
                 </div>
             </div>
@@ -104,19 +105,68 @@
     <script>
         let currentPhone = null;
         let conversations = {};
+        let contactsQuery = '';
+        let composerInitialized = false;
+
+        function initComposerListeners() {
+            if (composerInitialized) return;
+            const input = document.getElementById('messageInput');
+            const sendBtn = document.getElementById('sendButton');
+            if (!input || !sendBtn) return;
+
+            const autoResize = () => {
+                input.style.height = 'auto';
+                const maxH = 160; // px
+                input.style.height = Math.min(input.scrollHeight, maxH) + 'px';
+            };
+
+            input.addEventListener('input', () => {
+                const hasText = input.value.trim().length > 0;
+                sendBtn.disabled = !hasText;
+                autoResize();
+            });
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (input.value.trim()) {
+                        sendMessage();
+                    }
+                }
+            });
+
+            // Initialize state
+            autoResize();
+            sendBtn.disabled = true;
+            composerInitialized = true;
+        }
         
         // Load conversations on page load
         window.onload = function() {
             loadConversations();
             setInterval(loadConversations, 5000); // Refresh every 5 seconds
+            initComposerListeners();
+            const search = document.getElementById('contactsSearch');
+            if (search) {
+                search.addEventListener('input', () => {
+                    contactsQuery = search.value || '';
+                    updateContactsList();
+                });
+            }
         };
         
         function loadConversations() {
+            const contactsList = document.getElementById('contactsList');
+            if (contactsList && contactsList.children.length === 0) {
+                contactsList.setAttribute('aria-busy', 'true');
+                contactsList.innerHTML = renderContactsSkeleton();
+            }
             fetch('/api/conversations')
                 .then(response => response.json())
                 .then(data => {
                     conversations = data;
                     updateContactsList();
+                    if (contactsList) contactsList.removeAttribute('aria-busy');
                     if (currentPhone) {
                         loadMessages(currentPhone);
                     }
@@ -124,40 +174,91 @@
                 .catch(error => console.error('Error loading conversations:', error));
         }
         
+        // Helpers for contact timestamp sorting/formatting
+        function parseTs(ts) {
+            if (!ts) return null;
+            const s = typeof ts === 'string' ? ts.replace(' ', 'T') : ts;
+            const d = new Date(s);
+            return isNaN(d) ? null : d;
+        }
+
+        function friendlyTimestamp(ts) {
+            const dt = parseTs(ts);
+            if (!dt) return '';
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+            const midnight = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+            const time = dt.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+            if (midnight.getTime() === today.getTime()) return `Oggi ${time}`;
+            if (midnight.getTime() === yesterday.getTime()) return `Ieri ${time}`;
+            const sameYear = dt.getFullYear() === now.getFullYear();
+            const fmt = new Intl.DateTimeFormat('it-IT', sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' });
+            return fmt.format(dt);
+        }
+
         function updateContactsList() {
             const contactsList = document.getElementById('contactsList');
             contactsList.innerHTML = '';
-            
-            for (const [phone, info] of Object.entries(conversations)) {
+
+            const entries = Object.entries(conversations);
+            const q = (contactsQuery || '').trim().toLowerCase();
+            let filtered = q ? entries.filter(([phone, info]) => {
+                const dn = (info.name || `+${phone}`).toLowerCase();
+                const company = (info.company || '').toLowerCase();
+                const email = (info.email || '').toLowerCase();
+                const last = (info.last_message || '').toLowerCase();
+                return dn.includes(q) || company.includes(q) || email.includes(q) || phone.includes(q) || last.includes(q);
+            }) : entries;
+
+            // Sort by most recent last_timestamp descending
+            filtered = filtered.sort(([, a], [, b]) => {
+                const da = parseTs(a.last_timestamp);
+                const db = parseTs(b.last_timestamp);
+                const ta = da ? da.getTime() : 0;
+                const tb = db ? db.getTime() : 0;
+                return tb - ta;
+            });
+
+            if (filtered.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'p-3 text-muted';
+                empty.textContent = 'Nessun risultato';
+                contactsList.appendChild(empty);
+                return;
+            }
+
+            for (const [phone, info] of filtered) {
                 const contact = document.createElement('div');
                 contact.className = 'contact-item p-3 border-bottom';
                 if (phone === currentPhone) {
                     contact.classList.add('active');
                 }
-                
+
                 const displayName = info.name || `+${phone}`;
                 const lastMessage = info.last_message || '';
-                const timestamp = info.last_timestamp ? new Date(info.last_timestamp).toLocaleString('it-IT') : '';
-                
+                const timestamp = info.last_timestamp ? friendlyTimestamp(info.last_timestamp) : '';
+
                 contact.innerHTML = `
-                    <div class="d-flex justify-content-between">
-                        <div>
-                            <strong>${displayName}</strong>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div class="contact-title">
+                            <span class="contact-name">${displayName}</span>
                             ${info.company ? `<small class="text-muted"> - ${info.company}</small>` : ''}
                         </div>
                         <small class="text-muted">${timestamp}</small>
                     </div>
-                    <div class="text-muted small text-truncate">${lastMessage}</div>
+                    <div class="contact-preview text-muted small">${lastMessage}</div>
                 `;
-                
-                contact.onclick = () => selectContact(phone);
+
+                contact.onclick = () => selectContact(phone, contact);
                 contactsList.appendChild(contact);
             }
         }
         
-        function selectContact(phone) {
+        function selectContact(phone, el) {
             currentPhone = phone;
-            loadMessages(phone);
+            loadMessages(phone, true);
             
             // Update header
             const info = conversations[phone];
@@ -167,58 +268,146 @@
             
             // Show message input
             document.getElementById('messageInputContainer').style.display = 'block';
+            composerInitialized = false; // re-bind if needed after becoming visible
+            initComposerListeners();
+            // Autofocus composer and place caret at end
+            const input = document.getElementById('messageInput');
+            if (input) {
+                setTimeout(() => {
+                    input.focus();
+                    const val = input.value;
+                    input.value = '';
+                    input.value = val;
+                }, 0);
+            }
             
             // Update active contact
             document.querySelectorAll('.contact-item').forEach(item => {
                 item.classList.remove('active');
             });
-            event.currentTarget.classList.add('active');
+            if (el) el.classList.add('active');
         }
         
-        function loadMessages(phone) {
+        function loadMessages(phone, showSkeleton = false) {
+            const container = document.getElementById('messagesContainer');
+            if (showSkeleton && container) {
+                container.setAttribute('aria-busy', 'true');
+                container.innerHTML = renderMessagesSkeleton();
+            }
             fetch(`/api/messages/${phone}`)
                 .then(response => response.json())
                 .then(messages => {
                     displayMessages(messages);
                 })
-                .catch(error => console.error('Error loading messages:', error));
+                .catch(error => console.error('Error loading messages:', error))
+                .finally(() => { if (container) container.removeAttribute('aria-busy'); });
+        }
+
+        // Skeleton generators
+        function renderContactsSkeleton(count = 6) {
+            let html = '';
+            for (let i = 0; i < count; i++) {
+                html += `
+                <div class="contact-item p-3 border-bottom">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div class="skeleton skeleton-line s16 w-50"></div>
+                        <div class="skeleton skeleton-line s12 w-25"></div>
+                    </div>
+                    <div class="skeleton skeleton-line s12 w-75"></div>
+                </div>`;
+            }
+            return html;
+        }
+
+        function renderMessagesSkeleton(count = 4) {
+            let html = '';
+            for (let i = 0; i < count; i++) {
+                const align = i % 2 === 0 ? 'received' : 'sent';
+                html += `
+                <div class="message ${align}">
+                    <div class="message-bubble">
+                        <div class="skeleton skeleton-line s16 ${align === 'sent' ? 'w-50' : 'w-65'}"></div>
+                        <div class="skeleton skeleton-line s12 ${align === 'sent' ? 'w-35' : 'w-50'} mt-2"></div>
+                    </div>
+                </div>`;
+            }
+            return html;
         }
         
         function displayMessages(messages) {
             const container = document.getElementById('messagesContainer');
             container.innerHTML = '';
-            
+
             if (!messages || messages.length === 0) {
                 container.innerHTML = '<div class="text-center text-muted mt-5">Nessun messaggio</div>';
                 return;
             }
-            
-            messages.forEach(msg => {
+
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+
+            const dayKey = (d) => {
+                const dt = new Date(d);
+                return `${dt.getFullYear()}-${(dt.getMonth()+1).toString().padStart(2,'0')}-${dt.getDate().toString().padStart(2,'0')}`;
+            };
+
+            const formatDayLabel = (d) => {
+                const dt = new Date(d);
+                const midnight = new Date(dt);
+                midnight.setHours(0,0,0,0);
+                if (midnight.getTime() === today.getTime()) return 'Oggi';
+                if (midnight.getTime() === yesterday.getTime()) return 'Ieri';
+                return new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' }).format(dt);
+            };
+
+            let currentDay = null;
+
+            messages.forEach((msg, i) => {
+                const key = dayKey(msg.timestamp);
+                if (key !== currentDay) {
+                    currentDay = key;
+                    const sep = document.createElement('div');
+                    sep.className = 'day-separator';
+                    sep.setAttribute('data-label', formatDayLabel(msg.timestamp));
+                    container.appendChild(sep);
+                }
+
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${msg.sender === 'bot' ? 'sent' : 'received'}`;
-                
+
                 const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
-                
+
                 messageDiv.innerHTML = `
                     <div class="message-bubble">
                         <div>${msg.message}</div>
                         <small class="message-time">${time}</small>
                     </div>
                 `;
-                
+                // Animate only the last few messages for subtlety
+                if (i >= messages.length - 5) {
+                    messageDiv.classList.add('appear');
+                }
                 container.appendChild(messageDiv);
             });
-            
-            // Scroll to bottom
-            container.scrollTop = container.scrollHeight;
+
+            // Scroll to bottom (smooth, respecting reduced motion)
+            const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (prefersReduced) {
+                container.scrollTop = container.scrollHeight;
+            } else {
+                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            }
         }
         
         function sendMessage() {
             const input = document.getElementById('messageInput');
+            const sendBtn = document.getElementById('sendButton');
             const message = input.value.trim();
-            
             if (!message || !currentPhone) return;
-            
+            if (sendBtn) sendBtn.disabled = true;
+
             fetch('/api/send', {
                 method: 'POST',
                 headers: {
@@ -233,6 +422,7 @@
             .then(data => {
                 if (data.success) {
                     input.value = '';
+                    input.style.height = 'auto';
                     loadMessages(currentPhone);
                 } else {
                     alert('Errore nell\'invio del messaggio');
@@ -241,6 +431,9 @@
             .catch(error => {
                 console.error('Error sending message:', error);
                 alert('Errore nell\'invio del messaggio');
+            })
+            .finally(() => {
+                if (sendBtn) sendBtn.disabled = !input.value.trim();
             });
         }
         

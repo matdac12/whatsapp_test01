@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import requests
+import time
 from datetime import datetime
 import logging
 from threading import Thread
@@ -41,6 +42,11 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 # Configuration from environment
 PORT = int(os.environ.get('PORT', 3000))
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'my-verify-token-123')
+
+# HTTP Request Configuration
+REQUEST_TIMEOUT = (3, 10)  # (connect timeout, read timeout) in seconds
+MAX_RETRIES = 3
+RETRY_BACKOFF = [1, 2, 4]  # Wait 1s, 2s, 4s between retries
 
 # WhatsApp API Configuration
 WHATSAPP_TOKEN = os.environ.get('WHATSAPP_ACCESS_TOKEN', '')
@@ -79,6 +85,69 @@ if OPENAI_API_KEY and OPENAI_PROMPT_ID:
 else:
     logger.warning("⚠️  OpenAI credentials not configured")
 
+def make_request_with_retry(method, url, headers, json_data=None, timeout=REQUEST_TIMEOUT):
+    """
+    Make HTTP request with timeout and retry logic
+    
+    Args:
+        method: 'POST' or 'GET'
+        url: Request URL
+        headers: Request headers
+        json_data: JSON payload (optional)
+        timeout: Timeout tuple (connect, read)
+    
+    Returns:
+        Response object or None if all retries failed
+    """
+    last_error = None
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            if method == 'POST':
+                response = requests.post(
+                    url, 
+                    headers=headers, 
+                    json=json_data,
+                    timeout=timeout
+                )
+            else:
+                response = requests.get(
+                    url, 
+                    headers=headers,
+                    timeout=timeout
+                )
+            
+            # Check for rate limiting
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF)-1)]))
+                logger.warning(f"Rate limited. Waiting {retry_after}s before retry...")
+                time.sleep(retry_after)
+                continue
+            
+            # Success or client error (don't retry on 4xx except 429)
+            if response.status_code < 500:
+                return response
+                
+            # Server error (5xx) - retry
+            logger.warning(f"Server error {response.status_code}, attempt {attempt + 1}/{MAX_RETRIES}")
+            
+        except requests.Timeout:
+            logger.warning(f"Request timeout, attempt {attempt + 1}/{MAX_RETRIES}")
+            last_error = "timeout"
+        except requests.ConnectionError:
+            logger.warning(f"Connection error, attempt {attempt + 1}/{MAX_RETRIES}")
+            last_error = "connection"
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            last_error = str(e)
+        
+        # Wait before retry (except on last attempt)
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF)-1)])
+    
+    logger.error(f"All {MAX_RETRIES} attempts failed. Last error: {last_error}")
+    return None
+
 def send_whatsapp_message(to_number, message_text):
     """
     Send a WhatsApp message
@@ -104,19 +173,21 @@ def send_whatsapp_message(to_number, message_text):
         }
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            result = response.json()
-            logger.info(f"✅ Message sent to +{to_number}")
-            # Add sent message to database
-            db.add_message(to_number, "bot", message_text)
-            return True
-        else:
-            logger.error(f"Failed to send message: {response.text}")
-            return False
-    except Exception as e:
-        logger.error(f"Error sending message: {str(e)}")
+    # Use retry logic for sending message
+    response = make_request_with_retry('POST', url, headers, payload)
+    
+    if response is None:
+        logger.error(f"Failed to send message to {to_number} after {MAX_RETRIES} attempts")
+        return False
+    
+    if response.status_code == 200:
+        result = response.json()
+        logger.info(f"✅ Message sent to +{to_number}")
+        # Add sent message to database
+        db.add_message(to_number, "bot", message_text)
+        return True
+    else:
+        logger.error(f"Failed to send message: {response.text}")
         return False
 
 def mark_as_read(message_id):
@@ -139,12 +210,14 @@ def mark_as_read(message_id):
         "message_id": message_id
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        return response.status_code == 200
-    except Exception as e:
-        logger.error(f"Error marking message as read: {str(e)}")
+    # Use retry logic for marking as read
+    response = make_request_with_retry('POST', url, headers, payload)
+    
+    if response is None:
+        logger.error(f"Failed to mark message {message_id} as read after {MAX_RETRIES} attempts")
         return False
+        
+    return response.status_code == 200
 
 @app.route('/', methods=['GET'])
 def verify_webhook():
@@ -208,6 +281,14 @@ def process_message(message, contacts):
     msg_from = message.get('from')
     msg_id = message.get('id')
     msg_type = message.get('type')
+    
+    # Check for duplicate processing (deduplication)
+    if db.is_message_processed(msg_id):
+        logger.info(f"Message {msg_id} already processed, skipping duplicate")
+        return
+    
+    # Mark as processed immediately to prevent race conditions
+    db.mark_message_processed(msg_id, msg_from)
     
     # Mark message as read
     mark_as_read(msg_id)

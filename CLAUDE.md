@@ -301,6 +301,53 @@ email-validator>=2.0.0
 - Database handles concurrent access properly
 - Indexes on phone_number ensure fast queries
 
+## 🔧 Code Review Fixes (January 10, 2025)
+
+### Problem #1: Unbounded Thread Creation
+**Decision**: SKIPPED - Not needed for our scale
+- Current load: 10 users/day × 12 messages = 120 messages/day max
+- Python handles 10-20 threads easily
+- Would be over-engineering for our use case
+- Will revisit if scaling beyond 100+ concurrent users
+
+### Problem #4: Request Timeouts and Retries ✅ FIXED
+**What we implemented**:
+
+#### Configuration Added:
+```python
+REQUEST_TIMEOUT = (3, 10)  # 3s connect, 10s read timeout
+MAX_RETRIES = 3
+RETRY_BACKOFF = [1, 2, 4]  # Progressive wait between retries
+```
+
+#### New Helper Function:
+- `make_request_with_retry()` - Handles all HTTP requests with:
+  - Automatic timeout after 10 seconds
+  - Up to 3 retry attempts on failure
+  - Exponential backoff between retries
+  - Rate limit handling (respects Retry-After headers)
+  - Clean failure instead of hanging forever
+
+#### Updated Functions:
+- `send_whatsapp_message()` - Now uses retry logic
+- `mark_as_read()` - Now uses retry logic
+
+#### Benefits:
+- No more hanging requests during network issues
+- Automatic recovery from transient failures
+- Better debugging with clear timeout logs
+- Zero workflow changes - app behavior unchanged
+
+### Files Cleaned Up:
+- **Deleted `whatsapp_sender.py`** - Unused test file with duplicate WhatsApp sending logic
+- **Deleted `send_whatsapp.py`** - Old test script (previously removed for security)
+
+### Testing Notes:
+- Syntax verified with `python3 -m py_compile`
+- Normal operation unchanged
+- Timeouts now fail cleanly after max 10 seconds
+- Retry attempts logged for debugging
+
 ---
 *Last updated: January 10, 2025*
-*System refactored to use database-only approach, removing all in-memory storage*
+*System refactored to use database-only approach, added request timeouts/retries*

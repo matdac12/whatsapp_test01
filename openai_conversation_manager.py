@@ -64,13 +64,13 @@ class OpenAIConversationManager:
             logger.error(f"Error loading conversations from database: {e}")
             self.conversations = {}
     
-    def save_conversations(self):
-        """Save conversations to database for persistence"""
+    def save_all_conversations(self):
+        """Save ALL conversations to database (bulk operation - use sparingly)"""
         try:
             # Save all conversations to database
             for user_id, conversation_id in self.conversations.items():
                 db.save_conversation(user_id, conversation_id)
-            logger.debug("Conversations saved to database")
+            logger.debug(f"Saved all {len(self.conversations)} conversations to database")
         except Exception as e:
             logger.error(f"Error saving conversations to database: {e}")
     
@@ -105,7 +105,8 @@ class OpenAIConversationManager:
             
             conversation_id = conversation.id
             self.conversations[user_id] = conversation_id
-            self.save_conversations()
+            # Save only this single conversation, not all
+            db.save_conversation(user_id, conversation_id)
             
             logger.info(f"Created new conversation for user {user_id}: {conversation_id}")
             return conversation_id
@@ -204,7 +205,7 @@ class OpenAIConversationManager:
                 # Remove from our tracking
                 del self.conversations[user_id]
                 db.delete_conversation(user_id)
-                self.save_conversations()
+                # No need to save all conversations - we already deleted the one we needed
                 
                 logger.info(f"Reset conversation for user {user_id}")
                 return True
