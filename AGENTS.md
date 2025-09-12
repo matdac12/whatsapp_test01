@@ -33,3 +33,51 @@
 ## Security & Configuration Tips
 - Never commit secrets, `.env`, or user data (e.g., DB, message/profile JSON). Rotate any leaked tokens immediately.
 - Validate and sanitize input before DB writes; avoid logging PII. For UI, avoid `innerHTML` with untrusted strings.
+
+## Manuale Mode (Per-Contact) — Shipped
+
+Overview
+- Per-contact Manuale mode pauses auto-sending; AI drafts are stored for operator review. Manual send from dashboard auto-enables Manuale for that contact.
+
+Database
+- Schema additions to `client_profiles` (idempotent in `DatabaseManager._create_tables`):
+  - `manual_mode BOOLEAN DEFAULT 0`
+  - `ai_draft TEXT`
+  - `ai_draft_created_at TIMESTAMP`
+  - `notes TEXT`
+- Helpers added:
+  - `get_settings(phone)`, `set_manual_mode(phone, enabled)`
+  - `save_ai_draft(phone, text)`, `get_ai_draft(phone)`, `clear_ai_draft(phone)`
+  - `get_notes(phone)`, `set_notes(phone, text)`
+  - `get_last_user_message(phone)`
+
+Backend (Flask)
+- Gating in `handle_ai_conversation`: always passes `agent_notes` (from `notes`). When `manual_mode` is ON, saves AI output as draft and does not send to WhatsApp.
+- Manual send: `/api/send` auto-enables Manuale via `db.set_manual_mode(phone, True)`.
+- Endpoints:
+  - `GET /api/settings/<phone>` → `{ manual_mode }`
+  - `POST /api/settings/<phone>` with `{ manual_mode }`
+  - `GET /api/draft/<phone>` → `{ draft, created_at }`
+  - `POST /api/draft/<phone>/clear`
+  - `POST /api/draft/<phone>/regenerate` with `{ regenerate_notes }` combines persistent notes + extra input; regenerates using the last user message.
+- Profile endpoints now include `notes` in GET and accept `notes` in POST (persisted via DB).
+
+Frontend (Dashboard)
+- Header toggle “Manuale” (form-switch) synced with `/api/settings`.
+- Draft panel above composer shows “Bozza AI (Manuale)” with actions:
+  - Inserisci nel messaggio → moves draft to composer and clears draft immediately
+  - Rigenera → reveals “Aggiungi informazioni” textarea and regenerates a new draft
+  - Scarta → clears draft
+- Notes textarea added to the contact edit modal; saved via profile POST.
+- Polling: refreshes draft/settings for active contact; skips re-render of draft panel while typing/regenerating to preserve focus and caret.
+
+UX/Style Decisions
+- “Rigenera” button shows spinner + “Sto pensando…” while generating.
+- Separate scrolling for contacts vs. chat; page-level scrolling disabled.
+- Removed blue focus rings globally (no Bootstrap default glow).
+- Send button is pill-shaped; draft boxes use rounded corners consistent with composer.
+- Display name in list/header never shows literal `None`; shows only non-empty parts of name/lastname.
+
+Notes
+- Regenerate uses the last user message + `agent_notes` for best quality. We can switch to a different input strategy if desired.
+- Default Manuale = OFF; behavior is backward compatible.

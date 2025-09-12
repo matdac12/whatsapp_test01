@@ -74,6 +74,25 @@ class DatabaseManager:
                     hubspot_contact_id TEXT
                 )
             """)
+
+            # Idempotent migration: add manual mode and draft/notes columns
+            # Each ALTER is wrapped to avoid failure if column already exists
+            try:
+                cursor.execute("ALTER TABLE client_profiles ADD COLUMN manual_mode BOOLEAN DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE client_profiles ADD COLUMN ai_draft TEXT")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE client_profiles ADD COLUMN ai_draft_created_at TIMESTAMP")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE client_profiles ADD COLUMN notes TEXT")
+            except Exception:
+                pass
             
             # Messages table
             cursor.execute("""
@@ -243,6 +262,11 @@ class DatabaseManager:
                     if field in updates:
                         fields.append(f"{field} = ?")
                         values.append(updates[field] if updates[field] else None)
+
+                # Optional: allow notes update through this method when provided
+                if 'notes' in updates:
+                    fields.append("notes = ?")
+                    values.append(updates['notes'] if updates['notes'] else None)
                 
                 if not fields:
                     return True  # Nothing to update
@@ -285,6 +309,119 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error updating profile: {e}")
             return False
+
+    # === Settings & Draft Helpers ===
+
+    def get_settings(self, phone_number: str) -> Dict[str, Any]:
+        """Get per-contact settings like manual_mode"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT manual_mode FROM client_profiles WHERE phone_number = ?",
+                (phone_number,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                # Ensure profile exists with default settings
+                self.save_profile(phone_number, {})
+                return {"manual_mode": False}
+            return {"manual_mode": bool(row["manual_mode"]) if row["manual_mode"] is not None else False}
+
+    def set_manual_mode(self, phone_number: str, enabled: bool) -> None:
+        """Enable/disable manual mode for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO client_profiles (phone_number, manual_mode, created_at, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(phone_number) DO UPDATE SET
+                    manual_mode = excluded.manual_mode,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (phone_number, 1 if enabled else 0),
+            )
+
+    def save_ai_draft(self, phone_number: str, text: str) -> None:
+        """Save AI draft and timestamp for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE client_profiles
+                SET ai_draft = ?, ai_draft_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE phone_number = ?
+                """,
+                (text, phone_number),
+            )
+
+    def get_ai_draft(self, phone_number: str) -> Optional[Dict[str, Any]]:
+        """Get AI draft text and created timestamp"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT ai_draft, ai_draft_created_at FROM client_profiles WHERE phone_number = ?",
+                (phone_number,),
+            )
+            row = cursor.fetchone()
+            if row and row["ai_draft"]:
+                return {"text": row["ai_draft"], "created_at": row["ai_draft_created_at"]}
+            return None
+
+    def clear_ai_draft(self, phone_number: str) -> None:
+        """Clear AI draft for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE client_profiles
+                SET ai_draft = NULL, ai_draft_created_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE phone_number = ?
+                """,
+                (phone_number,),
+            )
+
+    def get_notes(self, phone_number: str) -> Optional[str]:
+        """Get notes for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT notes FROM client_profiles WHERE phone_number = ?",
+                (phone_number,),
+            )
+            row = cursor.fetchone()
+            return row["notes"] if row and row["notes"] else None
+
+    def set_notes(self, phone_number: str, text: Optional[str]) -> None:
+        """Set notes for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO client_profiles (phone_number, notes, created_at, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(phone_number) DO UPDATE SET
+                    notes = excluded.notes,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (phone_number, text if text else None),
+            )
+
+    def get_last_user_message(self, phone_number: str) -> Optional[str]:
+        """Return the last user message text for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT message FROM messages
+                WHERE phone_number = ? AND sender = 'user'
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (phone_number,),
+            )
+            row = cursor.fetchone()
+            return row["message"] if row else None
     
     # === Message Methods ===
     
@@ -405,8 +542,16 @@ class DatabaseManager:
                 """, (phone,))
                 last_msg = cursor.fetchone()
                 
+                # Build a clean display name without 'None' artifacts
+                display_name = None
+                if profile:
+                    first = profile['name'] if profile['name'] else None
+                    last = profile['last_name'] if profile['last_name'] else None
+                    if first or last:
+                        display_name = " ".join([p for p in [first, last] if p])
+
                 conversations[phone] = {
-                    'name': f"{profile['name']} {profile['last_name']}".strip() if profile and profile['name'] else None,
+                    'name': display_name,
                     'email': profile['email'] if profile else None,
                     'company': profile['ragione_sociale'] if profile else None,
                     'last_message': last_msg['message'] if last_msg else '',

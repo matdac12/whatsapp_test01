@@ -386,6 +386,107 @@ prompt_variables = {
 Without this variable, the OpenAI API will throw an error if the prompt template expects it.
 For manual mode regeneration, this will be populated with agent instructions.
 
+## 🎯 Manual Mode Implementation (January 2025)
+
+### Overview
+Implemented per-contact manual mode allowing agents to pause automatic AI replies for specific WhatsApp numbers. The AI still generates draft replies but doesn't auto-send them, giving agents full control.
+
+### Key Features
+
+#### 1. **Manual Mode Toggle**
+- Per-contact toggle in dashboard header
+- Default: Auto mode (Manuale = OFF) 
+- Auto-enables when agent sends manual message
+- Persists until explicitly turned OFF
+
+#### 2. **AI Draft Panel**
+- Shows above message composer when Manuale is ON
+- Displays AI-generated draft (not sent to WhatsApp)
+- Actions: Insert into composer, Regenerate with notes, or Discard
+- Preserves UI state during typing/regenerating
+
+#### 3. **Regenerate with Additional Info**
+- "Rigenera" button reveals "Aggiungi informazioni" textarea
+- Combines agent notes with contact notes for better context
+- Uses last user message for regeneration (better quality than empty prompt)
+- Temporary notes not persisted (only used for that regeneration)
+
+#### 4. **Contact Notes**
+- Persistent notes field in contact edit modal
+- Saved to database and included in all AI generations
+- Helps AI maintain context about customer preferences/history
+- Empty string passed when no notes exist
+
+### Database Schema Updates
+Added to `client_profiles` table (idempotent migrations):
+- `manual_mode BOOLEAN DEFAULT 0` - Manual mode state
+- `ai_draft TEXT` - Stored draft text
+- `ai_draft_created_at TIMESTAMP` - Draft creation time
+- `notes TEXT` - Persistent contact notes
+
+### Database Helper Methods
+New methods in `DatabaseManager`:
+- `get_settings(phone)` - Get manual mode state
+- `set_manual_mode(phone, enabled)` - Toggle manual mode
+- `save_ai_draft(phone, text)` - Store AI draft
+- `get_ai_draft(phone)` - Retrieve draft and timestamp
+- `clear_ai_draft(phone)` - Remove draft
+- `get_notes(phone)` - Get contact notes
+- `set_notes(phone, text)` - Update contact notes
+- `get_last_user_message(phone)` - Get last user message for regeneration
+
+### API Endpoints
+- `GET/POST /api/settings/<phone>` - Manual mode toggle
+- `GET /api/draft/<phone>` - Fetch current draft
+- `POST /api/draft/<phone>/clear` - Clear draft
+- `POST /api/draft/<phone>/regenerate` - Regenerate with extra notes
+- Profile endpoints extended to include `notes` field
+
+### Behavior Flow
+
+#### Auto Mode (Default):
+1. User message → AI generates response → Sends to WhatsApp automatically
+
+#### Manual Mode:
+1. User message → AI generates draft → Stores in database (not sent)
+2. Agent sees draft panel with options
+3. Can insert, regenerate with notes, or discard
+4. Manual send auto-enables Manuale for that contact
+
+### Implementation Details
+
+#### Prompt Variables:
+Always includes `agent_notes` variable (required):
+```python
+prompt_variables = {
+    "client_name": "...",
+    "client_lastname": "...",
+    "ragione_sociale": "...",
+    "email": "...",
+    "completion_status": "...",
+    "missing_fields_instruction": "...",
+    "agent_notes": contact_notes  # ALWAYS included, empty string if no notes
+}
+```
+
+#### Regeneration Strategy:
+- Uses last user message + combined notes (contact notes + regenerate input)
+- Better response quality than using empty prompt
+- Notes combined with separator: `\n\n---\n`
+
+#### UI/UX Refinements:
+- Separate scrolling for chat vs contacts
+- Draft panel with rounded corners
+- "Sto pensando..." spinner during regeneration
+- Pill-shaped send button
+- No blue focus rings on inputs
+
+### Design Decisions
+- "Inserisci" clears draft immediately (prevents stale panel)
+- Manual mode persists per-contact until explicitly disabled
+- Regenerate notes are temporary (not saved to database)
+- Auto-enable on manual send for better workflow
+
 ## 🚀 September 11, 2025 Improvements
 
 ### Problem #5: Message Deduplication ✅ IMPLEMENTED
@@ -455,5 +556,5 @@ For manual mode regeneration, this will be populated with agent instructions.
 - **Data integrity**: Timestamps preserved correctly
 
 ---
-*Last updated: September 11, 2025*
-*System now production-ready with SQLite, web dashboard, automated data extraction, improved reliability, and optimized performance*
+*Last updated: January 2025*
+*System now production-ready with SQLite, web dashboard, automated data extraction, improved reliability, optimized performance, and manual mode control*

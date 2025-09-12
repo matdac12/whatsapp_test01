@@ -1,5 +1,10 @@
 # Manual Mode (Per-Contact) — Implementation Plan
 
+Status: Completed
+- Implemented across DB, Flask backend, and dashboard UI.
+- Default remains Auto (Manuale = OFF). Manual send from dashboard auto-enables Manuale for that contact.
+- Regenerate uses the last user message combined with `agent_notes` (contact notes + optional extra input) for higher-quality drafts.
+
 ## Goals & Overview
 - Allow agents to pause automatic AI replies for a specific WhatsApp number (per-contact “Manuale” mode).
 - In Manuale mode, the AI still generates a draft reply but does NOT send it to WhatsApp. The agent can: insert the draft into the composer, regenerate with added info ("Aggiungi informazioni"), or discard.
@@ -118,12 +123,28 @@ Note: If you prefer a new `conversation_settings` table, we can adapt, but the a
 - Template library for quick replies.
 
 ## Implementation Order (Tasks)
-1) DB migration + helpers in `database.py`.
-2) API endpoints in `webhook_openai.py` for settings and draft CRUD.
-3) Notes GET/POST integration in profile endpoint and DB helpers.
-4) Webhook gating + draft save on Manuale; ensure a single `agent_notes` parameter is always passed to OpenAI calls (empty string if missing), and for regenerate compose `agent_notes = combine(contact.notes, regenerate_notes)`.
-5) Auto-enable Manuale on `/api/send`.
-6) Frontend: toggle + draft panel + regenerate UI with “Aggiungi informazioni”; extend edit modal with `Note` textarea and save.
-7) Wire polling to fetch settings/draft minimally and append-only message updates (already optimized).
+1) DB migration + helpers in `database.py`. [Done]
+2) API endpoints in `webhook_openai.py` for settings and draft CRUD. [Done]
+3) Notes GET/POST integration in profile endpoint and DB helpers. [Done]
+4) Webhook gating + draft save on Manuale; always pass `agent_notes`. Regenerate composes `agent_notes = combine(contact.notes, regenerate_notes)`. [Done]
+5) Auto-enable Manuale on `/api/send`. [Done]
+6) Frontend: toggle + draft panel + regenerate UI with “Aggiungi informazioni”; extend edit modal with `Note` textarea and save. [Done]
+7) Wire polling to fetch settings/draft minimally; skip re-render while typing/regenerating to preserve UX. [Done]
+
+What Shipped (Details)
+- DB: `client_profiles` now includes `manual_mode`, `ai_draft`, `ai_draft_created_at`, `notes` (idempotent ALTER statements).
+- DB helpers: settings, drafts, notes, and `get_last_user_message` to support regenerate.
+- Backend: manual gating in `handle_ai_conversation`; endpoints for settings and draft lifecycle; profile endpoints include `notes`.
+- Frontend: header toggle, draft panel with “Inserisci / Rigenera / Scarta”, regenerate textarea, spinner state with “Sto pensando…”, notes field in contact modal.
+- UX refinements: separate scrolling for chat vs. contacts; no blue focus rings; pill-shaped send; draft boxes rounded; display name avoids “None”.
+
+Notes/Deviations
+- Regeneration strategy uses the last user message and `agent_notes` (preferred for response quality) rather than an empty prompt.
+- “Inserisci” clears the draft immediately (design choice to avoid stale panel).
+
+Post-MVP Ideas
+- Unread badge + Manuale indicator in contact list.
+- SSE/WebSockets for immediate draft updates.
+- Draft history/queue.
 
 This plan aligns with the current codebase structure and keeps changes small, testable, and reversible.

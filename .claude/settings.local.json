@@ -5,7 +5,8 @@
       "Bash(pip3 install:*)",
       "Bash(python3 -m pip install:*)",
       "Bash(python3:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Read(//mnt/c/Users/MattiaDaCampo/OneDrive - Be Digital Consulting Srl/Kanban_Project/kanbanlite/**)"
     ],
     "deny": [],
     "ask": []

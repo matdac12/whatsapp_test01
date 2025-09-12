@@ -34,6 +34,12 @@
                             </h6>
                             <small class="text-muted" id="contactInfo"></small>
                         </div>
+                        <div class="d-flex align-items-center">
+                            <div class="form-check form-switch mb-0" title="Quando attivo, le risposte AI vengono salvate come bozze">
+                                <input class="form-check-input" type="checkbox" id="manualToggle" onchange="onManualToggleChange()">
+                                <label class="form-check-label" for="manualToggle">Manuale</label>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -44,6 +50,9 @@
                     </div>
                 </div>
                 
+                <!-- AI Draft Panel (Manuale) -->
+                <div id="draftPanelContainer" class="draft-panel p-3 border-top" style="display: none; background: var(--panel-soft);"></div>
+
                 <!-- Message Input -->
                 <div class="border-top p-3 message-input-container" id="messageInputContainer" style="display: none;">
                     <div class="input-group">
@@ -64,6 +73,13 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
+                    <div class="contact-meta mb-3">
+                        <div class="meta-item">
+                            <i class="bi bi-telephone"></i>
+                            <span class="meta-label">Numero</span>
+                            <span class="meta-value">+<span id="editPhoneText"></span></span>
+                        </div>
+                    </div>
                     <form id="editContactForm">
                         <div class="mb-3">
                             <label for="editName" class="form-label">Nome</label>
@@ -80,6 +96,10 @@
                         <div class="mb-3">
                             <label for="editEmail" class="form-label">Email</label>
                             <input type="email" class="form-control" id="editEmail" placeholder="Inserisci email">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editNotes" class="form-label">Note</label>
+                            <textarea class="form-control" id="editNotes" rows="3" placeholder="Note per questo contatto (visibili solo agli operatori)"></textarea>
                         </div>
                     </form>
                     <div class="alert alert-success d-none" id="saveSuccess">
@@ -111,6 +131,8 @@
         const lastKnownTsByPhone = {};
         const renderedCountByPhone = {};
         const lastDayKeyByPhone = {};
+        // Draft panel UI state to preserve regen section visibility and text
+        let draftPanelState = { regenOpen: false, regenNotes: '', isTyping: false, isRegenerating: false };
 
         function initComposerListeners() {
             if (composerInitialized) return;
@@ -177,6 +199,8 @@
                             loadMessages(currentPhone, false, true); // incremental append
                         }
                         if (newTs) lastKnownTsByPhone[currentPhone] = newTs;
+                        // Refresh settings/draft periodically to reflect new incoming drafts
+                        fetchSettingsAndDraft();
                     }
                 })
                 .catch(error => console.error('Error loading conversations:', error));
@@ -271,7 +295,7 @@
             // Update header
             const info = conversations[phone];
             document.getElementById('contactName').textContent = info.name || `+${phone}`;
-            document.getElementById('contactInfo').textContent = info.email ? `${info.email}` : '';
+            document.getElementById('contactInfo').textContent = `+${phone}`;
             document.getElementById('editIcon').style.display = 'inline';
             
             // Show message input
@@ -289,6 +313,9 @@
                 }, 0);
             }
             
+            // Fetch settings and any existing draft
+            fetchSettingsAndDraft();
+
             // Update active contact
             document.querySelectorAll('.contact-item').forEach(item => {
                 item.classList.remove('active');
@@ -498,6 +525,8 @@
                     input.value = '';
                     input.style.height = 'auto';
                     loadMessages(currentPhone, false, true);
+                    // Manuale is auto-enabled on manual send; refresh toggle and draft
+                    fetchSettingsAndDraft();
                 } else {
                     alert('Errore nell\'invio del messaggio');
                 }
@@ -519,10 +548,15 @@
                 .then(response => response.json())
                 .then(data => {
                     // Pre-fill form with existing data
+                    const phoneSpan = document.getElementById('editPhoneText');
+                    if (phoneSpan) phoneSpan.textContent = currentPhone;
                     document.getElementById('editName').value = data.name || '';
                     document.getElementById('editLastName').value = data.last_name || '';
                     document.getElementById('editCompany').value = data.ragione_sociale || '';
                     document.getElementById('editEmail').value = data.email || '';
+                    if (document.getElementById('editNotes')) {
+                        document.getElementById('editNotes').value = data.notes || '';
+                    }
                     
                     // Reset alerts
                     document.getElementById('saveSuccess').classList.add('d-none');
@@ -552,7 +586,8 @@
                 name: document.getElementById('editName').value.trim(),
                 last_name: document.getElementById('editLastName').value.trim(),
                 ragione_sociale: document.getElementById('editCompany').value.trim(),
-                email: document.getElementById('editEmail').value.trim()
+                email: document.getElementById('editEmail').value.trim(),
+                notes: (document.getElementById('editNotes') ? document.getElementById('editNotes').value : '')
             };
             
             // Send update request
@@ -572,6 +607,7 @@
                     
                     // Update UI
                     loadConversations();
+                    fetchSettingsAndDraft();
                     
                     // Close modal after delay
                     setTimeout(() => {
@@ -595,6 +631,197 @@
                 saveButtonText.classList.remove('d-none');
                 saveSpinner.classList.add('d-none');
             });
+        }
+
+        // Manuale toggle and draft panel logic
+        function onManualToggleChange() {
+            if (!currentPhone) return;
+            const checked = document.getElementById('manualToggle').checked;
+            fetch(`/api/settings/${currentPhone}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ manual_mode: !!checked })
+            }).then(() => {
+                // When turning off, hide draft panel
+                if (!checked) {
+                    hideDraftPanel();
+                } else {
+                    // When turning on, fetch any existing draft
+                    fetchDraft();
+                }
+            }).catch(err => console.error('Error updating settings:', err));
+        }
+
+        function setManualToggle(checked) {
+            const el = document.getElementById('manualToggle');
+            if (el) el.checked = !!checked;
+        }
+
+        function fetchSettingsAndDraft() {
+            if (!currentPhone) return;
+            fetch(`/api/settings/${currentPhone}`)
+                .then(r => r.json())
+                .then(s => {
+                    const isManual = !!s.manual_mode;
+                    setManualToggle(isManual);
+                    if (isManual) {
+                        // Avoid rerendering draft while user is typing or regenerating
+                        if (!draftPanelState.isTyping && !draftPanelState.isRegenerating) {
+                            fetchDraft();
+                        }
+                    } else {
+                        hideDraftPanel();
+                    }
+                })
+                .catch(err => console.error('Error fetching settings:', err));
+        }
+
+        function fetchDraft() {
+            if (!currentPhone) return;
+            fetch(`/api/draft/${currentPhone}`)
+                .then(r => r.json())
+                .then(d => {
+                    if (d && d.draft) {
+                        showDraftPanel(d.draft, d.created_at);
+                    } else {
+                        hideDraftPanel();
+                    }
+                })
+                .catch(err => console.error('Error fetching draft:', err));
+        }
+
+        function showDraftPanel(text, createdAt) {
+            const container = document.getElementById('draftPanelContainer');
+            if (!container) return;
+            container.style.display = 'block';
+
+            // Build static structure each time for simplicity
+            container.innerHTML = '';
+            const title = document.createElement('div');
+            title.className = 'd-flex justify-content-between align-items-center mb-2';
+            title.innerHTML = `<strong>Bozza AI (Manuale)</strong>`;
+            container.appendChild(title);
+
+            const body = document.createElement('div');
+            body.style.whiteSpace = 'pre-wrap';
+            body.style.maxHeight = '180px';
+            body.style.overflowY = 'auto';
+            body.className = 'p-2 mb-2 draft-body';
+            body.textContent = text; // safe: no innerHTML
+            container.appendChild(body);
+
+            const actions = document.createElement('div');
+            actions.className = 'd-flex gap-2 align-items-center flex-wrap';
+            actions.innerHTML = `
+                <button class="btn btn-outline-primary btn-sm" id="btnInsertDraft">Inserisci nel messaggio</button>
+                <button class="btn btn-outline-secondary btn-sm" id="btnRegenerate">Rigenera</button>
+                <button class="btn btn-outline-danger btn-sm" id="btnDiscard">Scarta</button>
+            `;
+            container.appendChild(actions);
+
+            const regenWrap = document.createElement('div');
+            regenWrap.className = 'mt-2';
+            regenWrap.style.display = draftPanelState.regenOpen ? 'block' : 'none';
+            regenWrap.innerHTML = `
+                <label class="form-label small">Aggiungi informazioni</label>
+                <textarea class="form-control form-control-sm regen-notes" id="regenNotes" rows="2" placeholder="Dettagli aggiuntivi per migliorare la bozza"></textarea>
+                <div class="mt-2 d-flex gap-2">
+                    <button class="btn btn-primary btn-sm" id="btnConfirmRegenerate">Rigenera</button>
+                    <button class="btn btn-light btn-sm" id="btnCancelRegenerate">Annulla</button>
+                </div>
+            `;
+            container.appendChild(regenWrap);
+
+            // Wire actions
+            document.getElementById('btnInsertDraft').onclick = () => {
+                const input = document.getElementById('messageInput');
+                if (input) {
+                    input.value = text;
+                    input.dispatchEvent(new Event('input'));
+                }
+                // Clear draft immediately after inserting
+                fetch(`/api/draft/${currentPhone}/clear`, { method: 'POST' })
+                    .finally(() => fetchDraft());
+            };
+            document.getElementById('btnRegenerate').onclick = () => {
+                draftPanelState.regenOpen = true;
+                regenWrap.style.display = 'block';
+                const el = document.getElementById('regenNotes');
+                if (el) {
+                    el.focus();
+                    const v = el.value; el.setSelectionRange(v.length, v.length);
+                }
+            };
+            document.getElementById('btnCancelRegenerate').onclick = () => {
+                draftPanelState.regenOpen = false;
+                regenWrap.style.display = 'none';
+            };
+            const notesEl = document.getElementById('regenNotes');
+            if (notesEl) {
+                notesEl.value = draftPanelState.regenNotes || '';
+                notesEl.addEventListener('input', () => {
+                    draftPanelState.regenNotes = notesEl.value;
+                });
+                notesEl.addEventListener('focus', () => { draftPanelState.isTyping = true; });
+                notesEl.addEventListener('blur', () => { draftPanelState.isTyping = false; });
+                // If user was typing when rerendered, restore focus and caret
+                if (draftPanelState.isTyping) {
+                    notesEl.focus();
+                    const v = notesEl.value; notesEl.setSelectionRange(v.length, v.length);
+                }
+            }
+            document.getElementById('btnConfirmRegenerate').onclick = () => {
+                const notes = (document.getElementById('regenNotes').value || '').trim();
+                const confirmBtn = document.getElementById('btnConfirmRegenerate');
+                const cancelBtn = document.getElementById('btnCancelRegenerate');
+                const notesBox = document.getElementById('regenNotes');
+                // Set loading state
+                draftPanelState.isRegenerating = true;
+                if (confirmBtn) {
+                    confirmBtn.disabled = true;
+                    confirmBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Sto pensando…';
+                }
+                if (cancelBtn) cancelBtn.disabled = true;
+                if (notesBox) notesBox.disabled = true;
+
+                fetch(`/api/draft/${currentPhone}/regenerate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ regenerate_notes: notes })
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res && res.success && res.draft) {
+                        // After regenerate, reset notes field but keep panel visible
+                        draftPanelState = { regenOpen: false, regenNotes: '', isTyping: false, isRegenerating: false };
+                        showDraftPanel(res.draft, null);
+                    }
+                })
+                .catch(err => {
+                    console.error('Error regenerating draft:', err);
+                    // Restore UI state on failure
+                    draftPanelState.isRegenerating = false;
+                    if (confirmBtn) {
+                        confirmBtn.disabled = false;
+                        confirmBtn.textContent = 'Rigenera';
+                    }
+                    if (cancelBtn) cancelBtn.disabled = false;
+                    if (notesBox) notesBox.disabled = false;
+                });
+            };
+            document.getElementById('btnDiscard').onclick = () => {
+                fetch(`/api/draft/${currentPhone}/clear`, { method: 'POST' })
+                    .then(() => { draftPanelState = { regenOpen: false, regenNotes: '' }; hideDraftPanel(); })
+                    .catch(() => { draftPanelState = { regenOpen: false, regenNotes: '' }; hideDraftPanel(); });
+            };
+        }
+
+        function hideDraftPanel() {
+            const container = document.getElementById('draftPanelContainer');
+            if (!container) return;
+            container.style.display = 'none';
+            container.innerHTML = '';
+            draftPanelState = { regenOpen: false, regenNotes: '' };
         }
     </script>
 </body>
