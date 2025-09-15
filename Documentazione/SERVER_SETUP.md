@@ -88,45 +88,18 @@ LOG_LEVEL=INFO
 
 Note: The application reads environment variables at process start. We’ll use a wrapper script to load `.env` before launching the server.
 
-## 6) Wrapper Script to Load .env and Start the Bot
-Create `$base\run_bot.ps1`:
-```powershell
-$ErrorActionPreference = 'Stop'
 
-# Define repo path and .env
-$repo = Join-Path $env:USERPROFILE 'Documents\whatsapp-bot\app\whatsapp_test01'
-$envPath = Join-Path $repo '.env'
-if (Test-Path $envPath) {
-  Get-Content $envPath | ForEach-Object {
-    if ($_ -and ($_ -notmatch '^\s*#') -and ($_ -match '=')) {
-      $kv = $_.Split('=',2)
-      $k = $kv[0].Trim()
-      $v = $kv[1].Trim()
-      [System.Environment]::SetEnvironmentVariable($k, $v, 'Process')
-    }
-  }
-}
 
 Set-Location $repo
 
-# Start Waitress (bind to localhost only). Use python -m to avoid PATH issues.
-& (Join-Path $env:USERPROFILE 'Documents\whatsapp-bot\app\.venv\Scripts\python.exe') -m waitress --listen=127.0.0.1:3000 webhook_openai:app
-```
 
-Test run (optional):
-```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Documents\whatsapp-bot\run_bot.ps1"
-# In another PowerShell:
-Invoke-RestMethod http://127.0.0.1:3000/health | ConvertTo-Json
-```
-Stop with Ctrl+C when done.
 
 ## 7) Install and Configure ngrok. SEE NGROK GUIDE FOR THIS
 Login and set authtoken:
 ```powershell
 ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>
 ```
-
+THIS IS OUTDATED, SEE GUIDE
 Create ngrok config at `$env:LOCALAPPDATA\ngrok\ngrok.yml` (default location used by ngrok service):
 se non trovi il config file, run: ngrok config edit
 ```yaml
@@ -144,29 +117,12 @@ tunnels:
 
 
 ## 8) Auto‑Start at Boot (Task Scheduler + ngrok service)
+we will use ALWAYSUP
 
-We’ll use Task Scheduler for the bot and ngrok’s native service (or Task Scheduler) for the tunnel.
+- Program/script: ` C:\Users\Administrator\Documents\whatsapp-bot\app\.venv\Scripts\python.exe`
+- Add arguments: start_openai_bot.py`
+- Start in: `C:\Users\Administrator\Documents\whatsapp-bot\app\whatsapp_test01`
 
-### 8.1) Create a Task for the Bot (UI)
-1. Open Task Scheduler → Create Task…
-2. General
-   - Name: `WA-Bot`
-   - Run whether user is logged on or not
-   - Run with highest privileges
-3. Triggers
-   - New… → At startup
-   - Optional: Add “At log on” (Delay task 30 seconds)
-4. Actions
-   - New… → Start a program
-   - Program/script: ` C:\Users\Administrator\Documents\whatsapp-bot\app\.venv\Scripts\python.exe`
-   - Add arguments: `C:\Users\Administrator\Documents\whatsapp-bot\app\whatsapp_test01\start_openai_bot.py`
-   - Start in: `C:\Users\Administrator\Documents\whatsapp-bot\app\whatsapp_test01`
-5. Settings
-   - Allow task to be run on demand
-   - If the task fails, restart every 1 minute, attempt 999 times
-   - If task is already running: Do not start a new instance
-
-Nota: quando inizia, non si vede niente (neanche 'running'). Attenzione a non avere due istanze. 
 
 cambia  app.run(debug=True) to false nello script quando andiamo in produzione
 
