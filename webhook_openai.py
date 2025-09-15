@@ -15,11 +15,6 @@ from datetime import datetime
 import logging
 from threading import Thread
 
-# Set default encoding to UTF-8
-if sys.stdout.encoding != 'utf-8':
-    import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 from openai_conversation_manager import OpenAIConversationManager
 from data_extractor import DataExtractor

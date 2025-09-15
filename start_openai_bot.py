@@ -19,7 +19,7 @@ os.chdir(script_dir)
 # Load environment variables from .env file
 env_file = script_dir / '.env'
 if env_file.exists():
-    print("📁 Loading environment variables from .env file...")
+    print("[ENV] Loading environment variables from .env file...")
     with open(env_file, 'r') as f:
         for line in f:
             line = line.strip()
@@ -27,11 +27,11 @@ if env_file.exists():
                 key, value = line.split('=', 1)
                 os.environ[key] = value
                 if 'TOKEN' in key or 'KEY' in key:
-                    print(f"   ✅ {key}: {'*' * 10}...")
+                    print(f"   [OK] {key}: {'*' * 10}...")
                 else:
-                    print(f"   ✅ {key}: {value[:30]}..." if len(value) > 30 else f"   ✅ {key}: {value}")
+                    print(f"   [OK] {key}: {value[:30]}..." if len(value) > 30 else f"   [OK] {key}: {value}")
 else:
-    print("⚠️  No .env file found. Using environment variables.")
+    print("[WARN] No .env file found. Using environment variables.")
 
 # Verify required environment variables
 required_vars = {
@@ -44,10 +44,10 @@ required_vars = {
 missing_vars = []
 for var, description in required_vars.items():
     if not os.environ.get(var):
-        missing_vars.append(f"   ❌ {var} ({description})")
+        missing_vars.append(f"   [ERROR] {var} ({description})")
 
 if missing_vars:
-    print("\n⚠️  Missing required environment variables:")
+    print("\n[WARN] Missing required environment variables:")
     for var in missing_vars:
         print(var)
     print("\nPlease set these in your .env file or environment.")
@@ -60,18 +60,18 @@ os.environ.setdefault('PORT', '3000')
 os.environ.setdefault('VERIFY_TOKEN', 'my-verify-token-123')
 os.environ.setdefault('OPENAI_MODEL', 'gpt-4.1')
 
-print("\n🚀 Starting WhatsApp OpenAI Bot")
+print("\n[START] Starting WhatsApp OpenAI Bot")
 print("=" * 50)
-print(f"📍 Local URL: http://localhost:{os.environ.get('PORT')}")
-print(f"🔑 Verify Token: {os.environ.get('VERIFY_TOKEN')}")
-print(f"🤖 OpenAI Model: {os.environ.get('OPENAI_MODEL')}")
+print(f"[LOCAL] Local URL: http://localhost:{os.environ.get('PORT')}")
+print(f"[TOKEN] Verify Token: {os.environ.get('VERIFY_TOKEN')}")
+print(f"[MODEL] OpenAI Model: {os.environ.get('OPENAI_MODEL')}")
 print("=" * 50)
-print("\n📝 To connect to WhatsApp:")
+print("\n[SETUP] To connect to WhatsApp:")
 print("1. Run ngrok: ngrok http " + os.environ.get('PORT', '3000'))
 print("2. Use the ngrok URL in WhatsApp webhook settings")
 print("3. Send a message to your WhatsApp Business number")
 print("=" * 50)
-print("\n⌨️  Available commands in WhatsApp:")
+print("\n[COMMANDS] Available commands in WhatsApp:")
 print("   /reset - Start a new conversation")
 print("   /history - View conversation history")
 print("   /info - Get bot information")
@@ -83,10 +83,10 @@ try:
     from webhook_openai import app
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 3000)), debug=True)
 except ImportError as e:
-    print(f"\n❌ Error importing webhook_openai: {e}")
+    print(f"\n[ERROR] Error importing webhook_openai: {e}")
     print("\nPlease install required packages:")
     print("   pip install -r requirements.txt")
     sys.exit(1)
 except Exception as e:
-    print(f"\n❌ Error starting server: {e}")
+    print(f"\n[ERROR] Error starting server: {e}")
     sys.exit(1)
