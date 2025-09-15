@@ -170,7 +170,22 @@
         // Load conversations on page load
         window.onload = function() {
             loadConversations();
-            setInterval(loadConversations, 5000); // Refresh every 5 seconds
+
+            // Adaptive refresh: 2s when visible, 5s when hidden
+            let refreshTimer;
+
+            function startAdaptiveRefresh() {
+                const refreshRate = document.hidden ? 5000 : 2000;
+                clearInterval(refreshTimer);
+                refreshTimer = setInterval(loadConversations, refreshRate);
+            }
+
+            // Listen for tab visibility changes
+            document.addEventListener('visibilitychange', startAdaptiveRefresh);
+
+            // Start the initial refresh
+            startAdaptiveRefresh();
+
             initComposerListeners();
             const search = document.getElementById('contactsSearch');
             if (search) {
@@ -294,8 +309,17 @@
             
             // Update header
             const info = conversations[phone];
+            const hasName = info.name && info.name !== `+${phone}`;
             document.getElementById('contactName').textContent = info.name || `+${phone}`;
-            document.getElementById('contactInfo').textContent = `+${phone}`;
+
+            // Only show contactInfo if we have an actual name (to avoid duplicate phone display)
+            const contactInfoEl = document.getElementById('contactInfo');
+            if (hasName) {
+                contactInfoEl.textContent = `+${phone}`;
+                contactInfoEl.style.display = 'inline';
+            } else {
+                contactInfoEl.style.display = 'none';
+            }
             document.getElementById('editIcon').style.display = 'inline';
             
             // Show message input

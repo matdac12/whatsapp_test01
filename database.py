@@ -211,10 +211,10 @@ class DatabaseManager:
                  hubspot_synced, hubspot_contact_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?)
                 ON CONFLICT(phone_number) DO UPDATE SET
-                    name = COALESCE(excluded.name, name),
-                    last_name = COALESCE(excluded.last_name, last_name),
-                    ragione_sociale = COALESCE(excluded.ragione_sociale, ragione_sociale),
-                    email = COALESCE(excluded.email, email),
+                    name = excluded.name,
+                    last_name = excluded.last_name,
+                    ragione_sociale = excluded.ragione_sociale,
+                    email = excluded.email,
                     found_all_info = excluded.found_all_info,
                     conversation_id = COALESCE(excluded.conversation_id, conversation_id),
                     updated_at = CURRENT_TIMESTAMP,
