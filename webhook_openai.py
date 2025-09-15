@@ -431,6 +431,9 @@ def handle_ai_conversation(sender, text, contact_name):
                 db.save_ai_draft(sender, ai_response)
                 logger.info(f"📝 Draft stored for +{sender} (Manuale ON)")
             else:
+                # Clear any existing draft before sending automatic response
+                db.clear_ai_draft(sender)
+
                 # Split long messages if needed
                 if len(ai_response) > 4000:
                     chunks = [ai_response[i:i+4000] for i in range(0, len(ai_response), 4000)]
