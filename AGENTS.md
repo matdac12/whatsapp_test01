@@ -33,6 +33,11 @@
 ## Security & Configuration Tips
 - Never commit secrets, `.env`, or user data (e.g., DB, message/profile JSON). Rotate any leaked tokens immediately.
 - Validate and sanitize input before DB writes; avoid logging PII. For UI, avoid `innerHTML` with untrusted strings.
+- Webhook payloads sent to Make escape all user-provided text, treat any 2xx status code as success, and handle `Retry-After` seconds or HTTP-date formats gracefully.
+
+## Make Webhook Notes
+- Conversation transcripts in webhook payloads no longer use the collapsible `<details>` wrapper so they render consistently in email clients.
+- The fallback summary string is "Riassunto non disponibile al momento. Riferirsi alla conversazione. Grazie" when OpenAI summarization is unavailable.
 
 ## Manuale Mode (Per-Contact) — Shipped
 

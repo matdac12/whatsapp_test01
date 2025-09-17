@@ -396,7 +396,38 @@
             }
             return html;
         }
-        
+
+        // WhatsApp message formatter
+        function formatWhatsAppMessage(text) {
+            // First escape HTML to prevent XSS
+            const escaped = text.replace(/&/g, '&amp;')
+                               .replace(/</g, '&lt;')
+                               .replace(/>/g, '&gt;')
+                               .replace(/"/g, '&quot;')
+                               .replace(/'/g, '&#39;');
+
+            // Apply WhatsApp formatting
+            let formatted = escaped;
+
+            // Convert newlines to <br>
+            formatted = formatted.replace(/\n/g, '<br>');
+
+            // Convert monospace/code (```text```) - keep as is since backticks are unambiguous
+            formatted = formatted.replace(/```([^`]+)```/g, '<code>$1</code>');
+
+            // Improved patterns with word boundaries to avoid false matches
+            // Bold (*text*) - must be surrounded by word boundaries or whitespace
+            formatted = formatted.replace(/(^|\s)\*([^*\s][^*]*[^*\s]|\S)\*(?=\s|$)/g, '$1<strong>$2</strong>');
+
+            // Italic (_text_) - must be surrounded by word boundaries or whitespace
+            formatted = formatted.replace(/(^|\s)_([^_\s][^_]*[^_\s]|\S)_(?=\s|$)/g, '$1<em>$2</em>');
+
+            // Strikethrough (~text~) - must be surrounded by word boundaries or whitespace
+            formatted = formatted.replace(/(^|\s)~([^~\s][^~]*[^~\s]|\S)~(?=\s|$)/g, '$1<del>$2</del>');
+
+            return formatted;
+        }
+
         function displayMessages(messages) {
             const container = document.getElementById('messagesContainer');
             container.innerHTML = '';
@@ -444,7 +475,7 @@
 
                 messageDiv.innerHTML = `
                     <div class="message-bubble">
-                        <div>${msg.message}</div>
+                        <div>${formatWhatsAppMessage(msg.message)}</div>
                         <small class="message-time">${time}</small>
                     </div>
                 `;
@@ -506,7 +537,7 @@
                 const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
                 messageDiv.innerHTML = `
                     <div class="message-bubble">
-                        <div>${msg.message}</div>
+                        <div>${formatWhatsAppMessage(msg.message)}</div>
                         <small class="message-time">${time}</small>
                     </div>
                 `;
