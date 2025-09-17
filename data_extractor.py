@@ -15,6 +15,7 @@ from pathlib import Path
 from openai import OpenAI
 from data_models import ClientInfo, ClientProfile
 from database import db
+from webhook_notifier import notify_profile_completion
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,16 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
         
         if is_newly_complete:
             logger.info(f"Profile completed for {whatsapp_number}: {new_info.to_display_string()}")
+            
+            # Send webhook notification asynchronously
+            try:
+                # Get the complete profile data for webhook
+                profile_for_webhook = db.get_profile(whatsapp_number)
+                if profile_for_webhook:
+                    notify_profile_completion(whatsapp_number, profile_for_webhook)
+            except Exception as e:
+                logger.error(f"Failed to send webhook notification: {e}")
+                # Don't let webhook failure affect normal flow
         
         logger.debug(f"Profile saved to database for {whatsapp_number}")
         
