@@ -6,7 +6,7 @@
     <title>WhatsApp Bot Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
     <div class="container-fluid h-100">
@@ -53,10 +53,13 @@
                 <!-- AI Draft Panel (Manuale) -->
                 <div id="draftPanelContainer" class="draft-panel p-3 border-top" style="display: none; background: var(--panel-soft);"></div>
 
+                <!-- Slash Command Dropdown -->
+                <div id="slashCommandMenu" class="slash-command-menu" style="display: none;"></div>
+
                 <!-- Message Input -->
                 <div class="border-top p-3 message-input-container" id="messageInputContainer" style="display: none;">
                     <div class="input-group">
-                        <textarea rows="1" class="form-control" id="messageInput" placeholder="Scrivi un messaggio…"></textarea>
+                        <textarea rows="1" class="form-control" id="messageInput" placeholder="Scrivi un messaggio… (usa / per comandi rapidi)"></textarea>
                         <button class="btn btn-success" id="sendButton" onclick="sendMessage()" disabled>Invia</button>
                     </div>
                 </div>
@@ -133,12 +136,23 @@
         const lastDayKeyByPhone = {};
         // Draft panel UI state to preserve regen section visibility and text
         let draftPanelState = { regenOpen: false, regenNotes: '', isTyping: false, isRegenerating: false };
+        // Slash command state
+        let slashCommandActive = false;
+        let slashCommands = [];
+        let selectedCommandIndex = -1;
+        // Polling counter for periodic full refresh (to catch status updates)
+        let pollCounter = 0;
 
         function initComposerListeners() {
-            if (composerInitialized) return;
+            if (composerInitialized) {
+                console.log('[DEBUG] Composer already initialized, skipping duplicate listener');
+                return;
+            }
             const input = document.getElementById('messageInput');
             const sendBtn = document.getElementById('sendButton');
             if (!input || !sendBtn) return;
+
+            console.log('[DEBUG] Initializing composer listeners (should only happen once)');
 
             const autoResize = () => {
                 input.style.height = 'auto';
@@ -150,9 +164,41 @@
                 const hasText = input.value.trim().length > 0;
                 sendBtn.disabled = !hasText;
                 autoResize();
+
+                // Check for slash commands
+                const text = input.value;
+                if (text.startsWith('/') && !text.includes(' ') && !text.includes('\n')) {
+                    // User is typing a slash command
+                    showSlashCommandMenu(text);
+                } else {
+                    hideSlashCommandMenu();
+                }
             });
 
             input.addEventListener('keydown', (e) => {
+                // Handle slash command navigation
+                if (slashCommandActive) {
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        selectedCommandIndex = Math.min(selectedCommandIndex + 1, slashCommands.length - 1);
+                        renderSlashCommandMenu();
+                        return;
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        selectedCommandIndex = Math.max(selectedCommandIndex - 1, 0);
+                        renderSlashCommandMenu();
+                        return;
+                    } else if (e.key === 'Enter' && selectedCommandIndex >= 0) {
+                        e.preventDefault();
+                        selectSlashCommand(slashCommands[selectedCommandIndex]);
+                        return;
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        hideSlashCommandMenu();
+                        return;
+                    }
+                }
+
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     if (input.value.trim()) {
@@ -210,9 +256,16 @@
                     if (contactsList) contactsList.removeAttribute('aria-busy');
                     if (currentPhone) {
                         const newTs = conversations[currentPhone] ? conversations[currentPhone].last_timestamp : null;
-                        if (renderedCountByPhone[currentPhone] != null && newTs && lastKnownTsByPhone[currentPhone] !== newTs) {
-                            loadMessages(currentPhone, false, true); // incremental append
+                        pollCounter++;
+
+                        // Refresh messages if: 1) New message arrived, OR 2) Every 3 polls (to catch status updates)
+                        const hasNewMessage = renderedCountByPhone[currentPhone] != null && newTs && lastKnownTsByPhone[currentPhone] !== newTs;
+                        const shouldRefreshForStatus = renderedCountByPhone[currentPhone] != null && pollCounter % 3 === 0;
+
+                        if (hasNewMessage || shouldRefreshForStatus) {
+                            loadMessages(currentPhone, false, false); // Full re-render to show status updates
                         }
+
                         if (newTs) lastKnownTsByPhone[currentPhone] = newTs;
                         // Refresh settings/draft periodically to reflect new incoming drafts
                         fetchSettingsAndDraft();
@@ -324,7 +377,7 @@
             
             // Show message input
             document.getElementById('messageInputContainer').style.display = 'block';
-            composerInitialized = false; // re-bind if needed after becoming visible
+            // Don't reset composerInitialized - the flag prevents duplicate listeners
             initComposerListeners();
             // Autofocus composer and place caret at end
             const input = document.getElementById('messageInput');
@@ -428,6 +481,91 @@
             return formatted;
         }
 
+        // Render WhatsApp status icon
+        function renderStatusIcon(status, sender) {
+            // Only show status for bot messages (sent by us)
+            if (sender !== 'bot') return '';
+
+            switch(status) {
+                case 'sent':
+                    return '<span class="status-icon status-sent">✓</span>';
+                case 'delivered':
+                    return '<span class="status-icon status-delivered">✓✓</span>';
+                case 'read':
+                    return '<span class="status-icon status-read">✓✓</span>';
+                case 'failed':
+                    return '<span class="status-icon status-failed">⚠</span>';
+                default:
+                    return '<span class="status-icon status-pending">○</span>';
+            }
+        }
+
+        // Slash command menu functions
+        function showSlashCommandMenu(query) {
+            fetch(`/api/canned-responses?q=${encodeURIComponent(query)}`)
+                .then(r => r.json())
+                .then(commands => {
+                    slashCommands = commands;
+                    selectedCommandIndex = commands.length > 0 ? 0 : -1;
+                    slashCommandActive = commands.length > 0;
+                    renderSlashCommandMenu();
+                })
+                .catch(err => console.error('Error fetching slash commands:', err));
+        }
+
+        function renderSlashCommandMenu() {
+            const menu = document.getElementById('slashCommandMenu');
+            if (!slashCommandActive || slashCommands.length === 0) {
+                menu.style.display = 'none';
+                return;
+            }
+
+            menu.innerHTML = '';
+            menu.style.display = 'block';
+
+            const title = document.createElement('div');
+            title.className = 'slash-command-title';
+            title.textContent = 'Comandi rapidi:';
+            menu.appendChild(title);
+
+            slashCommands.forEach((cmd, index) => {
+                const item = document.createElement('div');
+                item.className = 'slash-command-item';
+                if (index === selectedCommandIndex) {
+                    item.classList.add('selected');
+                }
+
+                item.innerHTML = `
+                    <div class="slash-command-shortcut">${cmd.shortcut}</div>
+                    <div class="slash-command-label">${cmd.label}</div>
+                `;
+
+                item.onclick = () => selectSlashCommand(cmd);
+                menu.appendChild(item);
+            });
+        }
+
+        function selectSlashCommand(command) {
+            const input = document.getElementById('messageInput');
+            if (input && command) {
+                input.value = command.message;
+                input.dispatchEvent(new Event('input'));
+                hideSlashCommandMenu();
+                input.focus();
+            }
+        }
+
+        function hideSlashCommandMenu() {
+            slashCommandActive = false;
+            slashCommands = [];
+            selectedCommandIndex = -1;
+            const menu = document.getElementById('slashCommandMenu');
+            if (menu) {
+                menu.style.display = 'none';
+                menu.innerHTML = '';
+            }
+        }
+
         function displayMessages(messages) {
             const container = document.getElementById('messagesContainer');
             container.innerHTML = '';
@@ -476,7 +614,7 @@
                 messageDiv.innerHTML = `
                     <div class="message-bubble">
                         <div>${formatWhatsAppMessage(msg.message)}</div>
-                        <small class="message-time">${time}</small>
+                        <small class="message-time">${time} ${renderStatusIcon(msg.status, msg.sender)}</small>
                     </div>
                 `;
                 // Animate only the last few messages for subtlety
@@ -538,7 +676,7 @@
                 messageDiv.innerHTML = `
                     <div class="message-bubble">
                         <div>${formatWhatsAppMessage(msg.message)}</div>
-                        <small class="message-time">${time}</small>
+                        <small class="message-time">${time} ${renderStatusIcon(msg.status, msg.sender)}</small>
                     </div>
                 `;
                 container.appendChild(messageDiv);

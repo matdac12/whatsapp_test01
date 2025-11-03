@@ -31,6 +31,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silence werkzeug HTTP request logs (only show warnings/errors)
+# This prevents log spam from dashboard API polling every 2 seconds
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
 # Create Flask app
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
@@ -178,8 +182,14 @@ def send_whatsapp_message(to_number, message_text):
     if response.status_code == 200:
         result = response.json()
         logger.info(f"✅ Message sent to +{to_number}")
-        # Add sent message to database
-        db.add_message(to_number, "bot", message_text)
+
+        # Extract WhatsApp message ID from response
+        whatsapp_msg_id = None
+        if 'messages' in result and len(result['messages']) > 0:
+            whatsapp_msg_id = result['messages'][0].get('id')
+
+        # Add sent message to database with WhatsApp message ID
+        db.add_message(to_number, "bot", message_text, whatsapp_message_id=whatsapp_msg_id)
         return True
     else:
         logger.error(f"Failed to send message: {response.text}")
@@ -214,6 +224,7 @@ def mark_as_read(message_id):
         
     return response.status_code == 200
 
+@app.route('/webhook', methods=['GET'])
 @app.route('/', methods=['GET'])
 def verify_webhook():
     """
@@ -238,23 +249,24 @@ def verify_webhook():
         logger.warning(f'Webhook verification failed: mode={mode}, token_match={token == VERIFY_TOKEN}')
         return '', 403
 
+@app.route('/webhook', methods=['POST'])
 @app.route('/', methods=['POST'])
 def receive_message():
     """
     Receives incoming WhatsApp messages and status updates
     """
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
+
     # Get the request body
     body = request.get_json()
-    
+
     # Log the received webhook
     logger.info(f"\n\nWebhook received {timestamp}\n")
     logger.debug(json.dumps(body, indent=2))
-    
+
     # Process the webhook data in a separate thread to respond quickly
     Thread(target=process_webhook, args=(body,)).start()
-    
+
     # Always return 200 OK immediately
     return '', 200
 
@@ -383,11 +395,17 @@ def handle_ai_conversation(sender, text, contact_name):
         if existing_profile and existing_profile['complete']:
             # Profile is already complete, no need to extract
             logger.info(f"✅ Using complete profile for {sender}")
+
+            # Helper function to normalize empty strings to None
+            def normalize_field(value):
+                """Convert empty strings to None for Pydantic validation"""
+                return value if value and str(value).strip() else None
+
             client_info = ClientInfo(
-                name=existing_profile['data']['name'],
-                last_name=existing_profile['data']['last_name'],
-                ragione_sociale=existing_profile['data']['ragione_sociale'],
-                email=existing_profile['data']['email'],
+                name=normalize_field(existing_profile['data']['name']),
+                last_name=normalize_field(existing_profile['data']['last_name']),
+                ragione_sociale=normalize_field(existing_profile['data']['ragione_sociale']),
+                email=normalize_field(existing_profile['data']['email']),
                 found_all_info=True,
                 what_is_missing=None
             )
@@ -467,9 +485,13 @@ def process_status(status):
     """
     msg_id = status.get('id')
     status_type = status.get('status')
-    
+
     logger.info(f"📊 Status update: {status_type} for message {msg_id}")
-    
+
+    # Update message status in database
+    if msg_id and status_type:
+        db.update_message_status(msg_id, status_type)
+
     if status_type == 'failed':
         errors = status.get('errors', [])
         for error in errors:
@@ -686,6 +708,26 @@ def api_update_profile(phone):
     except Exception as e:
         logger.error(f"Error updating profile: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/canned-responses', methods=['GET'])
+def api_get_canned_responses():
+    """
+    API endpoint to get canned responses (slash commands)
+    Optional query parameter ?q=/shortcut to filter by shortcut
+    """
+    try:
+        query = request.args.get('q', '').strip()
+
+        # If query starts with /, use it to filter
+        if query.startswith('/'):
+            responses = db.get_canned_responses(query)
+        else:
+            responses = db.get_canned_responses()
+
+        return jsonify(responses)
+    except Exception as e:
+        logger.error(f"Error fetching canned responses: {e}")
+        return jsonify([]), 500
 
 if __name__ == '__main__':
     logger.info(f"\n🚀 WhatsApp OpenAI Bot Server")

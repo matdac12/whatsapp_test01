@@ -57,18 +57,25 @@ class DataExtractor:
         if not profile_data:
             return ClientInfo()
         
+        # Convert empty strings to None for Pydantic validation
+        def normalize_field(value):
+            """Convert empty strings to None"""
+            return value if value and value.strip() else None
+
+        name = normalize_field(profile_data.get('name'))
+        last_name = normalize_field(profile_data.get('last_name'))
+        ragione_sociale = normalize_field(profile_data.get('ragione_sociale'))
+        email = normalize_field(profile_data.get('email'))
+
         what_is_missing = self._calculate_what_is_missing(
-            profile_data.get('name'),
-            profile_data.get('last_name'),
-            profile_data.get('ragione_sociale'),
-            profile_data.get('email')
+            name, last_name, ragione_sociale, email
         )
-        
+
         return ClientInfo(
-            name=profile_data.get('name'),
-            last_name=profile_data.get('last_name'),
-            ragione_sociale=profile_data.get('ragione_sociale'),
-            email=profile_data.get('email'),
+            name=name,
+            last_name=last_name,
+            ragione_sociale=ragione_sociale,
+            email=email,
             found_all_info=bool(profile_data.get('found_all_info', False)),
             what_is_missing=what_is_missing
         )

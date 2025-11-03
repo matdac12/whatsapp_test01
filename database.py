@@ -104,6 +104,16 @@ class DatabaseManager:
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Idempotent migration: add message status tracking columns
+            try:
+                cursor.execute("ALTER TABLE messages ADD COLUMN whatsapp_message_id TEXT")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'sent'")
+            except Exception:
+                pass
             
             # Processed messages table for deduplication
             cursor.execute("""
@@ -127,10 +137,29 @@ class DatabaseManager:
             
             # Index for cleanup of old processed messages
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_processed_messages_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_processed_messages_timestamp
                 ON processed_messages(processed_at)
             """)
-            
+
+            # Canned responses table for slash commands
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS canned_responses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    shortcut TEXT UNIQUE NOT NULL,
+                    label TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    category TEXT DEFAULT 'General',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create index on shortcut for fast lookup
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_canned_responses_shortcut
+                ON canned_responses(shortcut)
+            """)
+
             conn.commit()
     
     # === Conversation Methods ===
@@ -458,53 +487,73 @@ class DatabaseManager:
             logger.info(f"Cleaned up {deleted_count} old processed message records")
             return deleted_count
     
-    def add_message(self, phone_number: str, sender: str, message: str, timestamp: Optional[str] = None):
+    def add_message(self, phone_number: str, sender: str, message: str, timestamp: Optional[str] = None, whatsapp_message_id: Optional[str] = None):
         """Add a message to history"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             if timestamp:
                 cursor.execute("""
-                    INSERT INTO messages (phone_number, sender, message, timestamp)
-                    VALUES (?, ?, ?, ?)
-                """, (phone_number, sender, message, timestamp))
+                    INSERT INTO messages (phone_number, sender, message, timestamp, whatsapp_message_id, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (phone_number, sender, message, timestamp, whatsapp_message_id, 'sent'))
             else:
                 cursor.execute("""
-                    INSERT INTO messages (phone_number, sender, message)
-                    VALUES (?, ?, ?)
-                """, (phone_number, sender, message))
-    
+                    INSERT INTO messages (phone_number, sender, message, whatsapp_message_id, status)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (phone_number, sender, message, whatsapp_message_id, 'sent'))
+
+    def update_message_status(self, whatsapp_message_id: str, status: str) -> bool:
+        """Update message status based on WhatsApp message ID"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE messages
+                    SET status = ?
+                    WHERE whatsapp_message_id = ?
+                """, (status, whatsapp_message_id))
+
+                if cursor.rowcount > 0:
+                    logger.info(f"Updated message {whatsapp_message_id} status to: {status}")
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"Error updating message status: {e}")
+            return False
+
     def get_messages(self, phone_number: str, limit: Optional[int] = None) -> List[Dict]:
         """Get messages for a phone number"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             if limit:
                 cursor.execute("""
-                    SELECT sender, message, timestamp 
-                    FROM messages 
-                    WHERE phone_number = ? 
-                    ORDER BY timestamp DESC 
+                    SELECT sender, message, timestamp, status
+                    FROM messages
+                    WHERE phone_number = ?
+                    ORDER BY timestamp DESC
                     LIMIT ?
                 """, (phone_number, limit))
             else:
                 cursor.execute("""
-                    SELECT sender, message, timestamp 
-                    FROM messages 
-                    WHERE phone_number = ? 
+                    SELECT sender, message, timestamp, status
+                    FROM messages
+                    WHERE phone_number = ?
                     ORDER BY timestamp
                 """, (phone_number,))
-            
+
             messages = []
             for row in cursor.fetchall():
                 messages.append({
                     'sender': row['sender'],
                     'message': row['message'],
-                    'timestamp': row['timestamp']
+                    'timestamp': row['timestamp'],
+                    'status': row['status'] if row['status'] else 'sent'
                 })
-            
+
             # If we used limit, reverse to get chronological order
             if limit:
                 messages.reverse()
-            
+
             return messages
     
     def get_all_conversations_with_info(self) -> Dict[str, Dict]:
@@ -572,26 +621,93 @@ class DatabaseManager:
         """Get database statistics"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             stats = {}
-            
+
             # Count conversations
             cursor.execute("SELECT COUNT(*) as count FROM conversations")
             stats['total_conversations'] = cursor.fetchone()['count']
-            
+
             # Count profiles
             cursor.execute("SELECT COUNT(*) as count FROM client_profiles")
             stats['total_profiles'] = cursor.fetchone()['count']
-            
+
             # Count complete profiles
             cursor.execute("SELECT COUNT(*) as count FROM client_profiles WHERE found_all_info = 1")
             stats['complete_profiles'] = cursor.fetchone()['count']
-            
+
             # Count messages
             cursor.execute("SELECT COUNT(*) as count FROM messages")
             stats['total_messages'] = cursor.fetchone()['count']
-            
+
             return stats
+
+    # === Canned Responses Methods ===
+
+    def get_canned_responses(self, query: Optional[str] = None) -> List[Dict]:
+        """Get canned responses, optionally filtered by shortcut query"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            if query:
+                # Filter by shortcut starting with query
+                cursor.execute("""
+                    SELECT id, shortcut, label, message, category
+                    FROM canned_responses
+                    WHERE shortcut LIKE ?
+                    ORDER BY shortcut
+                """, (f"{query}%",))
+            else:
+                # Get all canned responses
+                cursor.execute("""
+                    SELECT id, shortcut, label, message, category
+                    FROM canned_responses
+                    ORDER BY shortcut
+                """)
+
+            responses = []
+            for row in cursor.fetchall():
+                responses.append({
+                    'id': row['id'],
+                    'shortcut': row['shortcut'],
+                    'label': row['label'],
+                    'message': row['message'],
+                    'category': row['category']
+                })
+
+            return responses
+
+    def add_canned_response(self, shortcut: str, label: str, message: str, category: str = 'General') -> bool:
+        """Add a new canned response"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO canned_responses (shortcut, label, message, category)
+                    VALUES (?, ?, ?, ?)
+                """, (shortcut, label, message, category))
+                return True
+        except Exception as e:
+            logger.error(f"Error adding canned response: {e}")
+            return False
+
+    def ensure_test_canned_responses(self):
+        """Insert test canned response if it doesn't exist"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if /orari exists
+            cursor.execute("SELECT COUNT(*) as count FROM canned_responses WHERE shortcut = '/orari'")
+            if cursor.fetchone()['count'] == 0:
+                # Insert test data
+                cursor.execute("""
+                    INSERT INTO canned_responses (shortcut, label, message, category)
+                    VALUES ('/orari', 'Orari di apertura', 'I nostri orari di apertura sono:\n\nLunedì - Venerdì: 9:00 - 18:00\nSabato: 10:00 - 14:00\nDomenica: Chiuso\n\nResti pure in contatto per qualsiasi esigenza!', 'Informazioni')
+                """)
+                logger.info("✅ Inserted test canned response: /orari")
 
 # Create a singleton instance
 db = DatabaseManager()
+
+# Ensure test canned responses exist
+db.ensure_test_canned_responses()
