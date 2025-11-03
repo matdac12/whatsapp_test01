@@ -222,12 +222,20 @@ def verify_webhook():
     mode = request.args.get('hub.mode')
     token = request.args.get('hub.verify_token')
     challenge = request.args.get('hub.challenge')
-    
+
+    # Debug logging
+    logger.info(f"Webhook verification attempt:")
+    logger.info(f"  hub.mode: '{mode}'")
+    logger.info(f"  hub.verify_token: '{token}'")
+    logger.info(f"  hub.challenge: '{challenge}'")
+    logger.info(f"  Expected VERIFY_TOKEN: '{VERIFY_TOKEN}'")
+    logger.info(f"  Token match: {token == VERIFY_TOKEN}")
+
     if mode == 'subscribe' and token == VERIFY_TOKEN:
         logger.info('WEBHOOK VERIFIED')
         return challenge, 200
     else:
-        logger.warning('Webhook verification failed')
+        logger.warning(f'Webhook verification failed: mode={mode}, token_match={token == VERIFY_TOKEN}')
         return '', 403
 
 @app.route('/', methods=['POST'])
