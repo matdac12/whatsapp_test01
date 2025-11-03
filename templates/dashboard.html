@@ -6,7 +6,7 @@
     <title>WhatsApp Bot Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
     <div class="container-fluid h-100">
@@ -140,8 +140,6 @@
         let slashCommandActive = false;
         let slashCommands = [];
         let selectedCommandIndex = -1;
-        // Polling counter for periodic full refresh (to catch status updates)
-        let pollCounter = 0;
 
         function initComposerListeners() {
             if (composerInitialized) {
@@ -232,6 +230,9 @@
             // Start the initial refresh
             startAdaptiveRefresh();
 
+            // Status update polling: Every 5 seconds
+            setInterval(updateMessageStatuses, 5000);
+
             initComposerListeners();
             const search = document.getElementById('contactsSearch');
             if (search) {
@@ -256,14 +257,12 @@
                     if (contactsList) contactsList.removeAttribute('aria-busy');
                     if (currentPhone) {
                         const newTs = conversations[currentPhone] ? conversations[currentPhone].last_timestamp : null;
-                        pollCounter++;
 
-                        // Refresh messages if: 1) New message arrived, OR 2) Every 3 polls (to catch status updates)
+                        // Refresh messages only if new message arrived (incremental append)
                         const hasNewMessage = renderedCountByPhone[currentPhone] != null && newTs && lastKnownTsByPhone[currentPhone] !== newTs;
-                        const shouldRefreshForStatus = renderedCountByPhone[currentPhone] != null && pollCounter % 3 === 0;
 
-                        if (hasNewMessage || shouldRefreshForStatus) {
-                            loadMessages(currentPhone, false, false); // Full re-render to show status updates
+                        if (hasNewMessage) {
+                            loadMessages(currentPhone, false, true); // Incremental append
                         }
 
                         if (newTs) lastKnownTsByPhone[currentPhone] = newTs;
@@ -608,6 +607,10 @@
 
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${msg.sender === 'bot' ? 'sent' : 'received'}`;
+                // Add data-msg-id attribute for status updates
+                if (msg.whatsapp_message_id) {
+                    messageDiv.setAttribute('data-msg-id', msg.whatsapp_message_id);
+                }
 
                 const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
 
@@ -672,6 +675,10 @@
 
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${msg.sender === 'bot' ? 'sent' : 'received'} appear`;
+                // Add data-msg-id attribute for status updates
+                if (msg.whatsapp_message_id) {
+                    messageDiv.setAttribute('data-msg-id', msg.whatsapp_message_id);
+                }
                 const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
                 messageDiv.innerHTML = `
                     <div class="message-bubble">
@@ -694,7 +701,40 @@
                 container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
             }
         }
-        
+
+        // Update message statuses in the DOM without re-rendering
+        function updateMessageStatuses() {
+            if (!currentPhone) return;
+
+            fetch(`/api/message-statuses/${currentPhone}`)
+                .then(response => response.json())
+                .then(statuses => {
+                    statuses.forEach(statusData => {
+                        const msgId = statusData.whatsapp_message_id;
+                        const newStatus = statusData.status;
+
+                        // Find message element by data-msg-id
+                        const messageEl = document.querySelector(`[data-msg-id="${msgId}"]`);
+                        if (messageEl) {
+                            // Find the status icon span within this message
+                            const statusIcon = messageEl.querySelector('.status-icon');
+                            if (statusIcon) {
+                                // Update the status icon HTML
+                                const newIconHTML = renderStatusIcon(newStatus, 'bot');
+                                const tempDiv = document.createElement('div');
+                                tempDiv.innerHTML = newIconHTML;
+                                const newIcon = tempDiv.firstChild;
+
+                                if (newIcon) {
+                                    statusIcon.replaceWith(newIcon);
+                                }
+                            }
+                        }
+                    });
+                })
+                .catch(error => console.error('Error updating message statuses:', error));
+        }
+
         function sendMessage() {
             const input = document.getElementById('messageInput');
             const sendBtn = document.getElementById('sendButton');

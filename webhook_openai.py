@@ -547,6 +547,14 @@ def api_get_messages(phone):
     messages = db.get_messages(phone)
     return jsonify(messages)
 
+@app.route('/api/message-statuses/<phone>')
+def api_get_message_statuses(phone):
+    """
+    API endpoint to get only message statuses for a specific phone number (lightweight)
+    """
+    statuses = db.get_message_statuses(phone)
+    return jsonify(statuses)
+
 @app.route('/api/send', methods=['POST'])
 def api_send_message():
     """

@@ -527,7 +527,7 @@ class DatabaseManager:
             cursor = conn.cursor()
             if limit:
                 cursor.execute("""
-                    SELECT sender, message, timestamp, status
+                    SELECT sender, message, timestamp, status, whatsapp_message_id
                     FROM messages
                     WHERE phone_number = ?
                     ORDER BY timestamp DESC
@@ -535,7 +535,7 @@ class DatabaseManager:
                 """, (phone_number, limit))
             else:
                 cursor.execute("""
-                    SELECT sender, message, timestamp, status
+                    SELECT sender, message, timestamp, status, whatsapp_message_id
                     FROM messages
                     WHERE phone_number = ?
                     ORDER BY timestamp
@@ -547,7 +547,8 @@ class DatabaseManager:
                     'sender': row['sender'],
                     'message': row['message'],
                     'timestamp': row['timestamp'],
-                    'status': row['status'] if row['status'] else 'sent'
+                    'status': row['status'] if row['status'] else 'sent',
+                    'whatsapp_message_id': row['whatsapp_message_id']
                 })
 
             # If we used limit, reverse to get chronological order
@@ -555,6 +556,26 @@ class DatabaseManager:
                 messages.reverse()
 
             return messages
+
+    def get_message_statuses(self, phone_number: str) -> List[Dict]:
+        """Get only message IDs and statuses for a phone number (lightweight query for status updates)"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT whatsapp_message_id, status
+                FROM messages
+                WHERE phone_number = ? AND whatsapp_message_id IS NOT NULL
+                ORDER BY timestamp
+            """, (phone_number,))
+
+            statuses = []
+            for row in cursor.fetchall():
+                statuses.append({
+                    'whatsapp_message_id': row['whatsapp_message_id'],
+                    'status': row['status'] if row['status'] else 'sent'
+                })
+
+            return statuses
     
     def get_all_conversations_with_info(self) -> Dict[str, Dict]:
         """Get all conversations with profile info and last message"""
