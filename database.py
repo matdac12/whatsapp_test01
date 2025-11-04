@@ -696,8 +696,8 @@ class DatabaseManager:
 
     def save_audio_message(self, phone_number: str, whatsapp_message_id: str, media_id: str,
                           file_path: str, mime_type: str, file_extension: str,
-                          is_voice: bool = False, duration: Optional[int] = None):
-        """Save audio message metadata to database"""
+                          is_voice: bool = False, duration: Optional[int] = None) -> int:
+        """Save audio message metadata to database and return audio_id"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -707,7 +707,9 @@ class DatabaseManager:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (phone_number, whatsapp_message_id, media_id, file_path, mime_type,
                   file_extension, 1 if is_voice else 0, duration))
-            logger.info(f"Saved audio message metadata for {phone_number}")
+            audio_id = cursor.lastrowid
+            logger.info(f"Saved audio message metadata for {phone_number} (audio_id: {audio_id})")
+            return audio_id
 
     def get_audio_messages(self, phone_number: str, limit: Optional[int] = None) -> List[Dict]:
         """Get audio messages for a phone number"""

@@ -298,6 +298,55 @@ def download_whatsapp_audio(media_id):
         logger.error(f"Error downloading audio: {e}")
         return None, None, None
 
+def transcribe_audio(audio_file_path):
+    """
+    Transcribe audio file using OpenAI gpt-4o-transcribe
+
+    Args:
+        audio_file_path: Path to the audio file
+
+    Returns:
+        str: Transcribed text or None on error
+    """
+    try:
+        from openai import OpenAI
+
+        if not OPENAI_API_KEY:
+            logger.error("OpenAI API key not configured")
+            return None
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Check file exists
+        if not os.path.exists(audio_file_path):
+            logger.error(f"Audio file not found: {audio_file_path}")
+            return None
+
+        # Check file size (25MB limit)
+        file_size = os.path.getsize(audio_file_path)
+        if file_size > 25 * 1024 * 1024:
+            logger.error(f"Audio file too large: {file_size} bytes (25MB max)")
+            return None
+
+        logger.info(f"Transcribing audio: {audio_file_path} ({file_size} bytes)")
+
+        # Transcribe with gpt-4o-transcribe
+        with open(audio_file_path, 'rb') as audio_file:
+            transcript = client.audio.transcriptions.create(
+                file=audio_file,
+                model="gpt-4o-transcribe",
+                response_format='text'
+            )
+
+        transcribed_text = transcript.strip()
+        logger.info(f"✅ Transcription successful: {transcribed_text[:100]}{'...' if len(transcribed_text) > 100 else ''}")
+
+        return transcribed_text
+
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return None
+
 @app.route('/webhook', methods=['GET'])
 @app.route('/', methods=['GET'])
 def verify_webhook():
@@ -435,8 +484,8 @@ def process_message(message, contacts):
 
                 logger.info(f"✅ Audio saved: {filepath} ({len(audio_bytes)} bytes)")
 
-                # Save metadata to database
-                db.save_audio_message(
+                # Save metadata to database and get audio_id
+                audio_id = db.save_audio_message(
                     phone_number=msg_from,
                     whatsapp_message_id=msg_id,
                     media_id=media_id,
@@ -446,11 +495,27 @@ def process_message(message, contacts):
                     is_voice=is_voice
                 )
 
-                # Send acknowledgment (no automatic transcription yet)
-                send_whatsapp_message(
-                    msg_from,
-                    "I received your audio message! 🎤\n\nI've saved it and you can play it back in the dashboard. Audio transcription coming soon!"
-                )
+                # Transcribe audio with gpt-4o-transcribe
+                transcription = transcribe_audio(filepath)
+
+                if transcription:
+                    logger.info(f"📝 Transcription: {transcription[:100]}{'...' if len(transcription) > 100 else ''}")
+
+                    # Update database with transcription
+                    db.update_audio_transcription(audio_id, transcription)
+
+                    # Add transcribed text as user message to database
+                    db.add_message(msg_from, "user", transcription)
+
+                    # Process transcription through AI using the same workflow as text messages
+                    handle_ai_conversation(msg_from, transcription, contact_name)
+                else:
+                    # Transcription failed
+                    logger.error("Transcription failed")
+                    send_whatsapp_message(
+                        msg_from,
+                        "I received your audio message but couldn't transcribe it. Could you please send a text message instead?"
+                    )
 
             except Exception as e:
                 logger.error(f"Failed to save audio file: {e}")
