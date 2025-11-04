@@ -16,6 +16,14 @@ message_history.json
 client_profiles.json
 profiles.json
 
+# Audio files from WhatsApp users
+audio/
+*.ogg
+*.m4a
+*.aac
+*.amr
+*.mp3
+
 # Python
 __pycache__/
 *.py[cod]

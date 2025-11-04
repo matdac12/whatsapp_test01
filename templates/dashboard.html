@@ -420,13 +420,25 @@
                 container.setAttribute('aria-busy', 'true');
                 container.innerHTML = renderMessagesSkeleton();
             }
-            fetch(`/api/messages/${phone}`)
-                .then(response => response.json())
-                .then(messages => {
+
+            // Fetch both text messages and audio messages in parallel
+            Promise.all([
+                fetch(`/api/messages/${phone}`).then(r => r.json()),
+                fetch(`/api/audio/${phone}`).then(r => r.json())
+            ])
+                .then(([textMessages, audioMessages]) => {
+                    // Tag message types
+                    const taggedTextMessages = textMessages.map(msg => ({...msg, type: 'text'}));
+                    const taggedAudioMessages = audioMessages.map(msg => ({...msg, type: 'audio', sender: 'user'}));
+
+                    // Merge and sort by timestamp
+                    const allMessages = [...taggedTextMessages, ...taggedAudioMessages]
+                        .sort((a, b) => new Date(a.timestamp || a.created_at) - new Date(b.timestamp || b.created_at));
+
                     if (incremental && renderedCountByPhone[phone] != null) {
-                        appendNewMessages(messages);
+                        appendNewMessages(allMessages);
                     } else {
-                        displayMessages(messages);
+                        displayMessages(allMessages);
                     }
                 })
                 .catch(error => console.error('Error loading messages:', error))
@@ -611,12 +623,14 @@
             let currentDay = null;
 
             messages.forEach((msg, i) => {
-                const key = dayKey(msg.timestamp);
+                // Use created_at for audio messages, timestamp for text messages
+                const msgTimestamp = msg.timestamp || msg.created_at;
+                const key = dayKey(msgTimestamp);
                 if (key !== currentDay) {
                     currentDay = key;
                     const sep = document.createElement('div');
                     sep.className = 'day-separator';
-                    sep.setAttribute('data-label', formatDayLabel(msg.timestamp));
+                    sep.setAttribute('data-label', formatDayLabel(msgTimestamp));
                     container.appendChild(sep);
                 }
 
@@ -627,14 +641,34 @@
                     messageDiv.setAttribute('data-msg-id', msg.whatsapp_message_id);
                 }
 
-                const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
+                const time = new Date(msgTimestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
 
-                messageDiv.innerHTML = `
-                    <div class="message-bubble">
-                        <div>${formatWhatsAppMessage(msg.message)}</div>
-                        <small class="message-time">${time} ${renderStatusIcon(msg.status, msg.sender)}</small>
-                    </div>
-                `;
+                // Render audio or text message
+                if (msg.type === 'audio') {
+                    // Handle both Windows (\) and Unix (/) path separators
+                    const filename = msg.file_path.split(/[/\\]/).pop();
+                    const voiceLabel = msg.is_voice ? 'Messaggio vocale' : 'File audio';
+                    messageDiv.innerHTML = `
+                        <div class="message-bubble audio-message">
+                            <div class="audio-header">
+                                <span class="audio-icon">🎤</span>
+                                <span class="audio-label">${voiceLabel}</span>
+                            </div>
+                            <audio controls preload="metadata" class="audio-player">
+                                <source src="/audio/${filename}" type="${msg.mime_type}">
+                                Your browser does not support audio playback.
+                            </audio>
+                            <small class="message-time">${time}</small>
+                        </div>
+                    `;
+                } else {
+                    messageDiv.innerHTML = `
+                        <div class="message-bubble">
+                            <div>${formatWhatsAppMessage(msg.message)}</div>
+                            <small class="message-time">${time} ${renderStatusIcon(msg.status, msg.sender)}</small>
+                        </div>
+                    `;
+                }
                 // Animate only the last few messages for subtlety
                 if (i >= messages.length - 5) {
                     messageDiv.classList.add('appear');
@@ -679,12 +713,14 @@
             let currentDay = lastDayKeyByPhone[currentPhone] || null;
 
             messages.slice(start).forEach(msg => {
-                const key = dk(msg.timestamp);
+                // Use created_at for audio messages, timestamp for text messages
+                const msgTimestamp = msg.timestamp || msg.created_at;
+                const key = dk(msgTimestamp);
                 if (key !== currentDay) {
                     currentDay = key;
                     const sep = document.createElement('div');
                     sep.className = 'day-separator';
-                    sep.setAttribute('data-label', dayLabel(msg.timestamp));
+                    sep.setAttribute('data-label', dayLabel(msgTimestamp));
                     container.appendChild(sep);
                 }
 
@@ -694,13 +730,34 @@
                 if (msg.whatsapp_message_id) {
                     messageDiv.setAttribute('data-msg-id', msg.whatsapp_message_id);
                 }
-                const time = new Date(msg.timestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
-                messageDiv.innerHTML = `
-                    <div class="message-bubble">
-                        <div>${formatWhatsAppMessage(msg.message)}</div>
-                        <small class="message-time">${time} ${renderStatusIcon(msg.status, msg.sender)}</small>
-                    </div>
-                `;
+                const time = new Date(msgTimestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
+
+                // Render audio or text message
+                if (msg.type === 'audio') {
+                    // Handle both Windows (\) and Unix (/) path separators
+                    const filename = msg.file_path.split(/[/\\]/).pop();
+                    const voiceLabel = msg.is_voice ? 'Messaggio vocale' : 'File audio';
+                    messageDiv.innerHTML = `
+                        <div class="message-bubble audio-message">
+                            <div class="audio-header">
+                                <span class="audio-icon">🎤</span>
+                                <span class="audio-label">${voiceLabel}</span>
+                            </div>
+                            <audio controls preload="metadata" class="audio-player">
+                                <source src="/audio/${filename}" type="${msg.mime_type}">
+                                Your browser does not support audio playback.
+                            </audio>
+                            <small class="message-time">${time}</small>
+                        </div>
+                    `;
+                } else {
+                    messageDiv.innerHTML = `
+                        <div class="message-bubble">
+                            <div>${formatWhatsAppMessage(msg.message)}</div>
+                            <small class="message-time">${time} ${renderStatusIcon(msg.status, msg.sender)}</small>
+                        </div>
+                    `;
+                }
                 container.appendChild(messageDiv);
             });
 

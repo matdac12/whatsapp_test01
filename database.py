@@ -123,7 +123,25 @@ class DatabaseManager:
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
+            # Audio messages table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audio_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT NOT NULL,
+                    whatsapp_message_id TEXT UNIQUE NOT NULL,
+                    media_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    mime_type TEXT,
+                    file_extension TEXT,
+                    is_voice BOOLEAN DEFAULT 0,
+                    duration INTEGER,
+                    transcribed_text TEXT,
+                    transcribed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_phone 
@@ -139,6 +157,17 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_processed_messages_timestamp
                 ON processed_messages(processed_at)
+            """)
+
+            # Index for audio messages
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audio_messages_phone
+                ON audio_messages(phone_number)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audio_messages_timestamp
+                ON audio_messages(created_at)
             """)
 
             # Canned responses table for slash commands
@@ -662,6 +691,80 @@ class DatabaseManager:
             stats['total_messages'] = cursor.fetchone()['count']
 
             return stats
+
+    # === Audio Messages Methods ===
+
+    def save_audio_message(self, phone_number: str, whatsapp_message_id: str, media_id: str,
+                          file_path: str, mime_type: str, file_extension: str,
+                          is_voice: bool = False, duration: Optional[int] = None):
+        """Save audio message metadata to database"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO audio_messages
+                (phone_number, whatsapp_message_id, media_id, file_path, mime_type,
+                 file_extension, is_voice, duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (phone_number, whatsapp_message_id, media_id, file_path, mime_type,
+                  file_extension, 1 if is_voice else 0, duration))
+            logger.info(f"Saved audio message metadata for {phone_number}")
+
+    def get_audio_messages(self, phone_number: str, limit: Optional[int] = None) -> List[Dict]:
+        """Get audio messages for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if limit:
+                cursor.execute("""
+                    SELECT id, whatsapp_message_id, media_id, file_path, mime_type,
+                           file_extension, is_voice, duration, transcribed_text,
+                           transcribed_at, created_at
+                    FROM audio_messages
+                    WHERE phone_number = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (phone_number, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, whatsapp_message_id, media_id, file_path, mime_type,
+                           file_extension, is_voice, duration, transcribed_text,
+                           transcribed_at, created_at
+                    FROM audio_messages
+                    WHERE phone_number = ?
+                    ORDER BY created_at
+                """, (phone_number,))
+
+            audio_messages = []
+            for row in cursor.fetchall():
+                audio_messages.append({
+                    'id': row['id'],
+                    'whatsapp_message_id': row['whatsapp_message_id'],
+                    'media_id': row['media_id'],
+                    'file_path': row['file_path'],
+                    'mime_type': row['mime_type'],
+                    'file_extension': row['file_extension'],
+                    'is_voice': bool(row['is_voice']),
+                    'duration': row['duration'],
+                    'transcribed_text': row['transcribed_text'],
+                    'transcribed_at': row['transcribed_at'],
+                    'created_at': row['created_at']
+                })
+
+            # If we used limit, reverse to get chronological order
+            if limit:
+                audio_messages.reverse()
+
+            return audio_messages
+
+    def update_audio_transcription(self, audio_id: int, transcribed_text: str):
+        """Update audio message with transcription"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE audio_messages
+                SET transcribed_text = ?, transcribed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (transcribed_text, audio_id))
+            logger.info(f"Updated transcription for audio message {audio_id}")
 
     # === Canned Responses Methods ===
 

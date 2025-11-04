@@ -224,6 +224,80 @@ def mark_as_read(message_id):
         
     return response.status_code == 200
 
+def download_whatsapp_audio(media_id):
+    """
+    Download audio/voice message from WhatsApp Cloud API
+
+    Args:
+        media_id: The media ID from the webhook payload (audio.id)
+
+    Returns:
+        tuple: (audio_bytes, mime_type, file_extension) or (None, None, None) on error
+    """
+    if not WHATSAPP_TOKEN:
+        logger.error("WhatsApp token not configured")
+        return None, None, None
+
+    try:
+        # Step 1: Get the media URL
+        url = f"https://graph.facebook.com/{API_VERSION}/{media_id}/"
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+        }
+
+        logger.info(f"Fetching media URL for {media_id}...")
+        response = make_request_with_retry('GET', url, headers)
+
+        if response is None or response.status_code != 200:
+            logger.error(f"Failed to get media URL: {response.text if response else 'No response'}")
+            return None, None, None
+
+        media_info = response.json()
+        download_url = media_info.get('url')
+        mime_type = media_info.get('mime_type', 'audio/ogg')
+        file_size = media_info.get('file_size', 0)
+
+        if not download_url:
+            logger.error("No download URL in response")
+            return None, None, None
+
+        logger.info(f"Media URL retrieved. Size: {file_size} bytes, Type: {mime_type}")
+
+        # Step 2: Download the actual audio file
+        logger.info(f"Downloading audio from {download_url[:50]}...")
+
+        # Use longer timeout for download (30 seconds)
+        audio_response = make_request_with_retry(
+            'GET',
+            download_url,
+            headers,
+            timeout=(3, 30)
+        )
+
+        if audio_response is None or audio_response.status_code != 200:
+            logger.error(f"Failed to download audio: {audio_response.status_code if audio_response else 'No response'}")
+            return None, None, None
+
+        # Determine file extension from MIME type
+        extension_map = {
+            'audio/ogg': 'ogg',
+            'audio/ogg; codecs=opus': 'ogg',
+            'audio/mpeg': 'mp3',
+            'audio/mp3': 'mp3',
+            'audio/mp4': 'm4a',
+            'audio/aac': 'aac',
+            'audio/amr': 'amr'
+        }
+
+        file_extension = extension_map.get(mime_type, 'ogg')
+
+        logger.info(f"✅ Audio downloaded: {len(audio_response.content)} bytes, {mime_type}")
+        return audio_response.content, mime_type, file_extension
+
+    except Exception as e:
+        logger.error(f"Error downloading audio: {e}")
+        return None, None, None
+
 @app.route('/webhook', methods=['GET'])
 @app.route('/', methods=['GET'])
 def verify_webhook():
@@ -335,8 +409,61 @@ def process_message(message, contacts):
         send_whatsapp_message(msg_from, "I received your image! Currently, I can only process text messages. Please send me a text message and I'll be happy to help! 📸")
     
     elif msg_type == 'audio':
-        logger.info(f"   Audio received")
-        send_whatsapp_message(msg_from, "I received your audio message! Currently, I can only process text messages. Please type your message and I'll respond! 🎤")
+        audio_data = message.get('audio', {})
+        media_id = audio_data.get('id')
+        is_voice = audio_data.get('voice', False)
+        mime_type = audio_data.get('mime_type', 'unknown')
+
+        logger.info(f"   Audio: {'Voice message' if is_voice else 'Audio file'} ({mime_type})")
+
+        # Download audio file
+        audio_bytes, mime, ext = download_whatsapp_audio(media_id)
+
+        if audio_bytes:
+            # Save audio to file
+            import os
+            from datetime import datetime
+
+            # Create filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"audio_{msg_from}_{timestamp}.{ext}"
+            filepath = os.path.join('audio', filename)
+
+            try:
+                with open(filepath, 'wb') as f:
+                    f.write(audio_bytes)
+
+                logger.info(f"✅ Audio saved: {filepath} ({len(audio_bytes)} bytes)")
+
+                # Save metadata to database
+                db.save_audio_message(
+                    phone_number=msg_from,
+                    whatsapp_message_id=msg_id,
+                    media_id=media_id,
+                    file_path=filepath,
+                    mime_type=mime,
+                    file_extension=ext,
+                    is_voice=is_voice
+                )
+
+                # Send acknowledgment (no automatic transcription yet)
+                send_whatsapp_message(
+                    msg_from,
+                    "I received your audio message! 🎤\n\nI've saved it and you can play it back in the dashboard. Audio transcription coming soon!"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to save audio file: {e}")
+                send_whatsapp_message(
+                    msg_from,
+                    "Sorry, I had trouble saving your audio message. Please try again."
+                )
+        else:
+            logger.error(f"Failed to download audio from {msg_from}")
+            send_whatsapp_message(
+                msg_from,
+                "Sorry, I couldn't download your audio message. Please try again."
+            )
     
     elif msg_type == 'location':
         location = message.get('location', {})
@@ -736,6 +863,57 @@ def api_get_canned_responses():
     except Exception as e:
         logger.error(f"Error fetching canned responses: {e}")
         return jsonify([]), 500
+
+@app.route('/api/audio/<phone>', methods=['GET'])
+def api_get_audio_messages(phone):
+    """
+    API endpoint to get audio messages for a phone number
+    """
+    try:
+        audio_messages = db.get_audio_messages(phone)
+        return jsonify(audio_messages)
+    except Exception as e:
+        logger.error(f"Error fetching audio messages for {phone}: {e}")
+        return jsonify([]), 500
+
+@app.route('/audio/<filename>', methods=['GET'])
+def serve_audio_file(filename):
+    """
+    Serve audio file for playback in dashboard
+    """
+    try:
+        from flask import send_from_directory
+        import os
+
+        # Security check: ensure filename doesn't contain path traversal
+        if '..' in filename or '/' in filename or '\\' in filename:
+            logger.warning(f"Suspicious audio file request: {filename}")
+            return "Invalid filename", 400
+
+        audio_dir = os.path.join(os.getcwd(), 'audio')
+
+        # Check if file exists
+        file_path = os.path.join(audio_dir, filename)
+        if not os.path.exists(file_path):
+            logger.warning(f"Audio file not found: {filename}")
+            return "Audio file not found", 404
+
+        # Determine MIME type from extension
+        ext = filename.split('.')[-1].lower()
+        mime_type_map = {
+            'ogg': 'audio/ogg; codecs=opus',  # WhatsApp voice messages use Opus codec
+            'mp3': 'audio/mpeg',
+            'm4a': 'audio/mp4',
+            'aac': 'audio/aac',
+            'amr': 'audio/amr'
+        }
+        mime_type = mime_type_map.get(ext, 'audio/ogg; codecs=opus')
+
+        logger.info(f"Serving audio file: {filename} with MIME type: {mime_type}")
+        return send_from_directory(audio_dir, filename, mimetype=mime_type)
+    except Exception as e:
+        logger.error(f"Error serving audio file {filename}: {e}")
+        return "Error serving audio file", 500
 
 if __name__ == '__main__':
     logger.info(f"\n🚀 WhatsApp OpenAI Bot Server")
