@@ -123,6 +123,8 @@ body, html {
 .chat-header {
     height: var(--header-height);
     background-color: var(--panel);
+    flex-shrink: 0; /* Never shrink - fixed header */
+    flex-grow: 0; /* Never grow */
 }
 
 .messages-container {
@@ -132,8 +134,8 @@ body, html {
     display: flex;
     flex-direction: column;
     overflow-y: auto;    /* only messages scroll */
-    flex: 1 1 auto;      /* fill available space between header and composer */
-    min-height: 0;       /* allow flex child to shrink when draft panel is visible */
+    flex: 1 1 auto;      /* fill available space, can grow and shrink */
+    min-height: 0;       /* critical: allow shrinking when draft panel needs space */
 }
 
 /* Ensure the right chat column allows inner scroll areas */
@@ -264,12 +266,16 @@ body, html {
 .message-input-container {
     background-color: var(--panel-soft);
     min-height: 70px;
+    max-height: 200px !important; /* Strict limit - never exceed */
+    overflow: hidden; /* Prevent children from pushing container larger */
+    flex-shrink: 0; /* Never shrink - stay at bottom */
+    flex-grow: 0; /* Never grow beyond max-height */
 }
 
 /* Composer controls */
 .message-input-container .form-control {
     resize: none;
-    max-height: 160px;
+    max-height: 160px !important; /* Hard limit to prevent overflow */
     overflow-y: auto;
     border-radius: var(--radius);
     font-size: 14px;
@@ -296,6 +302,8 @@ body, html {
 .message-input-container .input-group {
     gap: 8px; /* space between textarea and button */
     align-items: flex-end;
+    max-height: 100%; /* Never exceed container height */
+    overflow: visible; /* Allow button to show */
 }
 
 /* Global focus style overrides (remove blue ring everywhere) */
@@ -313,11 +321,17 @@ body, html {
 }
 
 /* Draft panel styles to match composer */
+.draft-panel {
+    /* No max-height - let it take as much space as needed */
+    flex-shrink: 0; /* Don't shrink - show full draft */
+    flex-grow: 0; /* Don't grow beyond content */
+}
 .draft-panel .draft-body {
     background-color: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-sm);
+    /* No height constraints - show all content */
 }
 .draft-panel .regen-notes {
     border-radius: var(--radius) !important;
