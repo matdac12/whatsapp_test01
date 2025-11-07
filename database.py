@@ -174,6 +174,18 @@ class DatabaseManager:
                 ON processed_messages(processed_at)
             """)
 
+            # Composite index for analytics: time-series queries by sender
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_messages_sender_timestamp
+                ON messages(sender, timestamp)
+            """)
+
+            # Index for profile completion analytics
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_profiles_found_all_info
+                ON client_profiles(found_all_info)
+            """)
+
             # Index for audio messages
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_audio_messages_phone
@@ -717,6 +729,184 @@ class DatabaseManager:
             stats['total_messages'] = cursor.fetchone()['count']
 
             return stats
+
+    # === Analytics Methods ===
+
+    def get_analytics_summary(self) -> Dict[str, Any]:
+        """Get all KPIs for the top stats bar"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Messages in last 24 hours
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM messages
+                WHERE timestamp >= datetime('now', '-1 day')
+            """)
+            messages_24h = cursor.fetchone()['count']
+
+            # Active conversations (24h, 7d, 30d)
+            cursor.execute("""
+                SELECT COUNT(DISTINCT phone_number) as count
+                FROM messages
+                WHERE timestamp >= datetime('now', '-1 day')
+            """)
+            active_24h = cursor.fetchone()['count']
+
+            cursor.execute("""
+                SELECT COUNT(DISTINCT phone_number) as count
+                FROM messages
+                WHERE timestamp >= datetime('now', '-7 days')
+            """)
+            active_7d = cursor.fetchone()['count']
+
+            cursor.execute("""
+                SELECT COUNT(DISTINCT phone_number) as count
+                FROM messages
+                WHERE timestamp >= datetime('now', '-30 days')
+            """)
+            active_30d = cursor.fetchone()['count']
+
+            # Response rate (bot replies / user messages, capped at 100%)
+            cursor.execute("""
+                SELECT
+                    SUM(CASE WHEN sender = 'user' THEN 1 ELSE 0 END) as user_messages,
+                    SUM(CASE WHEN sender = 'bot' THEN 1 ELSE 0 END) as bot_messages
+                FROM messages
+            """)
+            row = cursor.fetchone()
+            user_messages = row['user_messages'] or 0
+            bot_messages = row['bot_messages'] or 0
+            # Calculate response rate and cap at 100% (bot can send multiple messages per user message)
+            raw_rate = (bot_messages * 100.0 / user_messages) if user_messages > 0 else 0
+            response_rate = round(min(raw_rate, 100.0), 1)
+
+            # Profile completion rate
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN found_all_info = 1 THEN 1 ELSE 0 END) as complete
+                FROM client_profiles
+            """)
+            row = cursor.fetchone()
+            total_profiles = row['total'] or 0
+            complete_profiles = row['complete'] or 0
+            completion_rate = round((complete_profiles * 100.0 / total_profiles), 1) if total_profiles > 0 else 0
+
+            return {
+                'messages_24h': messages_24h,
+                'active_24h': active_24h,
+                'active_7d': active_7d,
+                'active_30d': active_30d,
+                'response_rate': response_rate,
+                'completion_rate': completion_rate,
+                'user_messages': user_messages,
+                'bot_messages': bot_messages,
+                'total_profiles': total_profiles,
+                'complete_profiles': complete_profiles
+            }
+
+    def get_message_timeline(self, days: int = 30) -> Dict[str, Any]:
+        """Get daily message counts for time series chart"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    DATE(timestamp) as date,
+                    sender,
+                    COUNT(*) as count
+                FROM messages
+                WHERE timestamp >= datetime('now', '-' || ? || ' days')
+                GROUP BY DATE(timestamp), sender
+                ORDER BY date ASC
+            """, (days,))
+
+            # Organize data by date with separate user/bot counts
+            timeline = {}
+            for row in cursor.fetchall():
+                date = row['date']
+                sender = row['sender']
+                count = row['count']
+
+                if date not in timeline:
+                    timeline[date] = {'user': 0, 'bot': 0}
+
+                timeline[date][sender] = count
+
+            # Convert to lists for Chart.js
+            dates = sorted(timeline.keys())
+            user_counts = [timeline[d]['user'] for d in dates]
+            bot_counts = [timeline[d]['bot'] for d in dates]
+
+            return {
+                'dates': dates,
+                'user_messages': user_counts,
+                'bot_messages': bot_counts
+            }
+
+    def get_profile_completion_stats(self) -> Dict[str, Any]:
+        """Get profile completion statistics"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN found_all_info = 1 THEN 1 ELSE 0 END) as complete,
+                    SUM(CASE WHEN found_all_info = 0 OR found_all_info IS NULL THEN 1 ELSE 0 END) as incomplete
+                FROM client_profiles
+            """)
+            row = cursor.fetchone()
+
+            total = row['total'] or 0
+            complete = row['complete'] or 0
+            incomplete = row['incomplete'] or 0
+
+            return {
+                'total': total,
+                'complete': complete,
+                'incomplete': incomplete,
+                'completion_percentage': round((complete * 100.0 / total), 1) if total > 0 else 0
+            }
+
+    def get_field_completion_breakdown(self) -> Dict[str, Any]:
+        """Get breakdown of which profile fields are completed"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN name IS NOT NULL AND name != '' THEN 1 ELSE 0 END) as has_name,
+                    SUM(CASE WHEN last_name IS NOT NULL AND last_name != '' THEN 1 ELSE 0 END) as has_last_name,
+                    SUM(CASE WHEN ragione_sociale IS NOT NULL AND ragione_sociale != '' THEN 1 ELSE 0 END) as has_company,
+                    SUM(CASE WHEN email IS NOT NULL AND email != '' THEN 1 ELSE 0 END) as has_email
+                FROM client_profiles
+            """)
+            row = cursor.fetchone()
+
+            total = row['total'] or 1  # Avoid division by zero
+
+            return {
+                'name': {
+                    'count': row['has_name'] or 0,
+                    'percentage': round((row['has_name'] or 0) * 100.0 / total, 1)
+                },
+                'last_name': {
+                    'count': row['has_last_name'] or 0,
+                    'percentage': round((row['has_last_name'] or 0) * 100.0 / total, 1)
+                },
+                'company': {
+                    'count': row['has_company'] or 0,
+                    'percentage': round((row['has_company'] or 0) * 100.0 / total, 1)
+                },
+                'email': {
+                    'count': row['has_email'] or 0,
+                    'percentage': round((row['has_email'] or 0) * 100.0 / total, 1)
+                },
+                'total_profiles': total
+            }
 
     # === Audio Messages Methods ===
 

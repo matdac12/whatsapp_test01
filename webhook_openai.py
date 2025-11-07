@@ -1015,6 +1015,13 @@ def dashboard():
     """
     return render_template('dashboard.html')
 
+@app.route('/analytics')
+def analytics():
+    """
+    Analytics dashboard with charts and detailed metrics
+    """
+    return render_template('analytics.html')
+
 @app.route('/images/<phone>/<filename>')
 def serve_image(phone, filename):
     """
@@ -1279,6 +1286,71 @@ def api_get_audio_messages(phone):
     except Exception as e:
         logger.error(f"Error fetching audio messages for {phone}: {e}")
         return jsonify([]), 500
+
+# === Analytics Endpoints ===
+
+@app.route('/api/analytics/summary', methods=['GET'])
+def api_analytics_summary():
+    """
+    Get analytics summary for top stats bar
+    Returns: messages_24h, active conversations, response rate, completion rate
+    """
+    try:
+        summary = db.get_analytics_summary()
+        return jsonify(summary)
+    except Exception as e:
+        logger.error(f"Error fetching analytics summary: {e}")
+        return jsonify({
+            'messages_24h': 0,
+            'active_24h': 0,
+            'active_7d': 0,
+            'active_30d': 0,
+            'response_rate': 0,
+            'completion_rate': 0
+        }), 500
+
+@app.route('/api/analytics/messages-timeline', methods=['GET'])
+def api_analytics_timeline():
+    """
+    Get message timeline for chart
+    Query params: days (default: 30)
+    Returns: dates, user_messages, bot_messages arrays
+    """
+    try:
+        days = int(request.args.get('days', 30))
+        # Cap at 365 days
+        days = min(days, 365)
+
+        timeline = db.get_message_timeline(days)
+        return jsonify(timeline)
+    except Exception as e:
+        logger.error(f"Error fetching message timeline: {e}")
+        return jsonify({
+            'dates': [],
+            'user_messages': [],
+            'bot_messages': []
+        }), 500
+
+@app.route('/api/analytics/profile-breakdown', methods=['GET'])
+def api_analytics_profile_breakdown():
+    """
+    Get profile completion breakdown
+    Returns: total, complete, incomplete, field-level stats
+    """
+    try:
+        stats = db.get_profile_completion_stats()
+        breakdown = db.get_field_completion_breakdown()
+
+        return jsonify({
+            'overall': stats,
+            'fields': breakdown
+        })
+    except Exception as e:
+        logger.error(f"Error fetching profile breakdown: {e}")
+        return jsonify({
+            'overall': {'total': 0, 'complete': 0, 'incomplete': 0, 'completion_percentage': 0},
+            'fields': {}
+        }), 500
 
 @app.route('/audio/<filename>', methods=['GET'])
 def serve_audio_file(filename):

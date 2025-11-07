@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics - WhatsApp Bot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="/static/style.css?v=7">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        /* Override dashboard styles to allow scrolling */
+        html, body {
+            height: auto !important;
+            min-height: 100vh !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+        }
+
+        body {
+            background: var(--bg);
+        }
+
+        .analytics-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            padding-bottom: 4rem;
+            width: 100%;
+        }
+        .chart-card {
+            background: var(--panel);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-md);
+            margin-bottom: 1.5rem;
+        }
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .chart-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text);
+            margin: 0;
+        }
+        .date-range-selector {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .date-btn {
+            padding: 0.4rem 1rem;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            color: var(--text);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.875rem;
+        }
+        .date-btn:hover {
+            background: var(--hover);
+        }
+        .date-btn.active {
+            background: var(--brand);
+            color: white;
+            border-color: var(--brand);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--panel);
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: var(--shadow-sm);
+            border-left: 4px solid var(--brand);
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text);
+            margin: 0.5rem 0;
+        }
+        .stat-label {
+            color: var(--muted);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-change {
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+        .stat-change.positive {
+            color: #10b981;
+        }
+        .stat-change.negative {
+            color: #ef4444;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+        }
+        .field-progress {
+            margin-bottom: 1.5rem;
+        }
+        .field-progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        .field-progress-bar {
+            height: 8px;
+            background: var(--panel-soft);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .field-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--brand), var(--accent));
+            transition: width 0.3s ease;
+        }
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--brand);
+            text-decoration: none;
+            font-weight: 500;
+            margin-bottom: 1.5rem;
+        }
+        .back-link:hover {
+            color: var(--accent);
+        }
+    </style>
+</head>
+<body>
+    <div class="analytics-container">
+        <!-- Header -->
+        <div class="mb-4">
+            <a href="/dashboard" class="back-link">
+                <i class="bi bi-arrow-left"></i>
+                Torna alla Dashboard
+            </a>
+            <h1 class="mt-3">📊 Analytics</h1>
+            <p class="text-muted">Analisi dettagliata delle conversazioni e performance del bot</p>
+        </div>
+
+        <!-- Summary Stats -->
+        <div class="stats-grid" id="summaryStats">
+            <div class="stat-card">
+                <div class="stat-label">Caricamento...</div>
+                <div class="stat-value">-</div>
+            </div>
+        </div>
+
+        <!-- Messages Over Time Chart -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <h2 class="chart-title">
+                    <i class="bi bi-graph-up me-2"></i>
+                    Messaggi nel Tempo
+                </h2>
+                <div class="date-range-selector">
+                    <button class="date-btn" onclick="loadTimeline(7)" id="btn-7d">7 giorni</button>
+                    <button class="date-btn active" onclick="loadTimeline(30)" id="btn-30d">30 giorni</button>
+                    <button class="date-btn" onclick="loadTimeline(90)" id="btn-90d">90 giorni</button>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="messagesChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Profile Completion Section -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h2 class="chart-title">
+                            <i class="bi bi-pie-chart me-2"></i>
+                            Completamento Profili
+                        </h2>
+                    </div>
+                    <div class="chart-container" style="height: 300px;">
+                        <canvas id="profileChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h2 class="chart-title">
+                            <i class="bi bi-list-check me-2"></i>
+                            Campi Profilo
+                        </h2>
+                    </div>
+                    <div id="fieldBreakdown">
+                        <!-- Field progress bars will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let messagesChart = null;
+        let profileChart = null;
+        let currentDays = 30;
+
+        // Load summary stats
+        function loadSummaryStats() {
+            console.log('Loading summary stats...');
+            fetch('/api/analytics/summary')
+                .then(response => {
+                    console.log('Summary response:', response);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Summary data:', data);
+                    const statsHtml = `
+                        <div class="stat-card">
+                            <div class="stat-label">Messaggi Totali</div>
+                            <div class="stat-value">${(data.user_messages || 0) + (data.bot_messages || 0)}</div>
+                            <div class="stat-change">
+                                <i class="bi bi-chat-dots"></i>
+                                ${data.user_messages || 0} utenti, ${data.bot_messages || 0} bot
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Messaggi (24h)</div>
+                            <div class="stat-value">${data.messages_24h || 0}</div>
+                            <div class="stat-change">
+                                <i class="bi bi-clock"></i>
+                                Ultime 24 ore
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Conversazioni Attive</div>
+                            <div class="stat-value">${data.active_24h || 0}</div>
+                            <div class="stat-change">
+                                <i class="bi bi-people"></i>
+                                ${data.active_7d || 0} negli ultimi 7 giorni
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Tasso di Risposta</div>
+                            <div class="stat-value">${data.response_rate || 0}%</div>
+                            <div class="stat-change ${data.response_rate >= 90 ? 'positive' : ''}">
+                                <i class="bi bi-check-circle"></i>
+                                ${data.response_rate >= 90 ? 'Eccellente' : 'Buono'}
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('summaryStats').innerHTML = statsHtml;
+                })
+                .catch(error => {
+                    console.error('Error loading summary stats:', error);
+                    document.getElementById('summaryStats').innerHTML = `
+                        <div class="stat-card">
+                            <div class="stat-label">Errore</div>
+                            <div class="stat-value">-</div>
+                            <div class="stat-change">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                Impossibile caricare i dati
+                            </div>
+                        </div>
+                    `;
+                });
+        }
+
+        // Load messages timeline chart
+        function loadTimeline(days) {
+            console.log('Loading timeline for', days, 'days...');
+            currentDays = days;
+
+            // Update active button
+            document.querySelectorAll('.date-btn').forEach(btn => btn.classList.remove('active'));
+            const activeBtn = document.getElementById(`btn-${days}d`);
+            if (activeBtn) {
+                activeBtn.classList.add('active');
+            }
+
+            fetch(`/api/analytics/messages-timeline?days=${days}`)
+                .then(response => {
+                    console.log('Timeline response:', response);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Timeline data:', data);
+                    const ctx = document.getElementById('messagesChart');
+                    if (!ctx) {
+                        console.error('Canvas element "messagesChart" not found!');
+                        return;
+                    }
+
+                    // Destroy existing chart if it exists
+                    if (messagesChart) {
+                        messagesChart.destroy();
+                    }
+
+                    console.log('Creating chart with data:', {
+                        dates: data.dates?.length || 0,
+                        userMessages: data.user_messages?.length || 0,
+                        botMessages: data.bot_messages?.length || 0
+                    });
+
+                    messagesChart = new Chart(ctx.getContext('2d'), {
+                        type: 'line',
+                        data: {
+                            labels: data.dates,
+                            datasets: [
+                                {
+                                    label: 'Messaggi Utenti',
+                                    data: data.user_messages,
+                                    borderColor: '#128c7e',
+                                    backgroundColor: 'rgba(18, 140, 126, 0.1)',
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Risposte Bot',
+                                    data: data.bot_messages,
+                                    borderColor: '#25d366',
+                                    backgroundColor: 'rgba(37, 211, 102, 0.1)',
+                                    tension: 0.4,
+                                    fill: true
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top'
+                                },
+                                tooltip: {
+                                    mode: 'index',
+                                    intersect: false
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        precision: 0
+                                    }
+                                }
+                            },
+                            interaction: {
+                                mode: 'nearest',
+                                axis: 'x',
+                                intersect: false
+                            }
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading timeline:', error);
+                    alert('Errore nel caricamento del grafico timeline. Controlla la console per i dettagli.');
+                });
+        }
+
+        // Load profile completion charts
+        function loadProfileCompletion() {
+            console.log('Loading profile completion...');
+            fetch('/api/analytics/profile-breakdown')
+                .then(response => {
+                    console.log('Profile breakdown response:', response);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Profile breakdown data:', data);
+
+                    // Donut chart
+                    const ctx = document.getElementById('profileChart');
+                    if (!ctx) {
+                        console.error('Canvas element "profileChart" not found!');
+                        return;
+                    }
+
+                    if (profileChart) {
+                        profileChart.destroy();
+                    }
+
+                    console.log('Creating profile chart with data:', {
+                        complete: data.overall?.complete || 0,
+                        incomplete: data.overall?.incomplete || 0
+                    });
+
+                    profileChart = new Chart(ctx.getContext('2d'), {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Completi', 'Incompleti'],
+                            datasets: [{
+                                data: [
+                                    data.overall.complete || 0,
+                                    data.overall.incomplete || 0
+                                ],
+                                backgroundColor: [
+                                    '#25d366',
+                                    '#e9ecef'
+                                ],
+                                borderWidth: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'bottom'
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(context) {
+                                            const label = context.label || '';
+                                            const value = context.parsed || 0;
+                                            const total = data.overall.total || 1;
+                                            const percentage = ((value / total) * 100).toFixed(1);
+                                            return `${label}: ${value} (${percentage}%)`;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    // Field breakdown
+                    const fields = data.fields || {};
+                    const fieldLabels = {
+                        name: 'Nome',
+                        last_name: 'Cognome',
+                        company: 'Azienda',
+                        email: 'Email'
+                    };
+
+                    let breakdownHtml = '';
+                    Object.keys(fieldLabels).forEach(key => {
+                        const field = fields[key] || { count: 0, percentage: 0 };
+                        breakdownHtml += `
+                            <div class="field-progress">
+                                <div class="field-progress-label">
+                                    <span>${fieldLabels[key]}</span>
+                                    <span><strong>${field.count}</strong> / ${fields.total_profiles || 0} (${field.percentage}%)</span>
+                                </div>
+                                <div class="field-progress-bar">
+                                    <div class="field-progress-fill" style="width: ${field.percentage}%"></div>
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    document.getElementById('fieldBreakdown').innerHTML = breakdownHtml;
+                })
+                .catch(error => {
+                    console.error('Error loading profile completion:', error);
+                    alert('Errore nel caricamento del grafico profili. Controlla la console per i dettagli.');
+                });
+        }
+
+        // Initialize on page load
+        window.onload = function() {
+            loadSummaryStats();
+            loadTimeline(30);
+            loadProfileCompletion();
+
+            // Auto-refresh every 60 seconds
+            setInterval(() => {
+                loadSummaryStats();
+                loadTimeline(currentDays);
+                loadProfileCompletion();
+            }, 60000);
+        };
+    </script>
+</body>
+</html>

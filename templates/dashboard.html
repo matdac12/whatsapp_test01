@@ -10,7 +10,70 @@
 </head>
 <body>
     <div class="container-fluid h-100">
-        <div class="row h-100">
+        <!-- Analytics Stats Bar -->
+        <div class="stats-bar bg-light border-bottom py-2 px-3">
+            <div class="container-fluid">
+                <div class="row align-items-center">
+                    <div class="col-auto me-auto">
+                        <h6 class="mb-0 text-muted">Dashboard</h6>
+                    </div>
+                    <div class="col-auto">
+                        <a href="/analytics" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-bar-chart"></i> Analytics
+                        </a>
+                    </div>
+                    <div class="col-auto">
+                        <div class="d-flex gap-3">
+                            <!-- Messages 24h KPI -->
+                            <div class="kpi-card">
+                                <div class="kpi-icon">
+                                    <i class="bi bi-chat-dots"></i>
+                                </div>
+                                <div class="kpi-content">
+                                    <div class="kpi-value" id="kpi-messages">-</div>
+                                    <div class="kpi-label">Messaggi (24h)</div>
+                                </div>
+                            </div>
+
+                            <!-- Active Conversations KPI -->
+                            <div class="kpi-card">
+                                <div class="kpi-icon">
+                                    <i class="bi bi-people"></i>
+                                </div>
+                                <div class="kpi-content">
+                                    <div class="kpi-value" id="kpi-active">-</div>
+                                    <div class="kpi-label">Attivi (24h)</div>
+                                </div>
+                            </div>
+
+                            <!-- Response Rate KPI -->
+                            <div class="kpi-card">
+                                <div class="kpi-icon">
+                                    <i class="bi bi-check-circle"></i>
+                                </div>
+                                <div class="kpi-content">
+                                    <div class="kpi-value" id="kpi-response">-</div>
+                                    <div class="kpi-label">Tasso Risposta</div>
+                                </div>
+                            </div>
+
+                            <!-- Profile Completion KPI -->
+                            <div class="kpi-card">
+                                <div class="kpi-icon">
+                                    <i class="bi bi-clipboard-check"></i>
+                                </div>
+                                <div class="kpi-content">
+                                    <div class="kpi-value" id="kpi-completion">-</div>
+                                    <div class="kpi-label">Profili Completi</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row h-100" style="height: calc(100vh - 60px) !important;">
             <!-- Left Sidebar - Contact List -->
             <div class="col-md-4 col-lg-3 border-end p-0 contacts-sidebar h-100">
                 <div class="bg-light p-3 border-bottom">
@@ -225,10 +288,33 @@
             sendBtn.disabled = true;
             composerInitialized = true;
         }
-        
+
+        // Load analytics summary for stats bar
+        function loadAnalytics() {
+            fetch('/api/analytics/summary')
+                .then(response => response.json())
+                .then(data => {
+                    // Update KPI values
+                    document.getElementById('kpi-messages').textContent = data.messages_24h || 0;
+                    document.getElementById('kpi-active').textContent = data.active_24h || 0;
+                    document.getElementById('kpi-response').textContent = (data.response_rate || 0) + '%';
+                    document.getElementById('kpi-completion').textContent = (data.completion_rate || 0) + '%';
+                })
+                .catch(error => {
+                    console.error('Error loading analytics:', error);
+                    // Set fallback values on error
+                    document.getElementById('kpi-messages').textContent = '-';
+                    document.getElementById('kpi-active').textContent = '-';
+                    document.getElementById('kpi-response').textContent = '-';
+                    document.getElementById('kpi-completion').textContent = '-';
+                });
+        }
+
         // Load conversations on page load
         window.onload = function() {
+            // Load initial data
             loadConversations();
+            loadAnalytics();
 
             // Adaptive refresh: 2s when visible, 5s when hidden
             let refreshTimer;
@@ -244,6 +330,9 @@
 
             // Start the initial refresh
             startAdaptiveRefresh();
+
+            // Analytics refresh: Every 30 seconds
+            setInterval(loadAnalytics, 30000);
 
             // Status update polling: Every 5 seconds
             setInterval(updateMessageStatuses, 5000);
