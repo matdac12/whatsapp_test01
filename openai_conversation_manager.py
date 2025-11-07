@@ -179,7 +179,89 @@ class OpenAIConversationManager:
             logger.error(f"Error generating response: {e}")
             # Return a fallback message
             return "I apologize, but I'm having trouble processing your message right now. Please try again."
-    
+
+    def generate_response_with_image(self, user_id: str, image_base64: str, mime_type: str,
+                                     caption: Optional[str] = None,
+                                     prompt_variables: Optional[Dict[str, str]] = None) -> str:
+        """
+        Generate an AI response for an image message using GPT-4o vision capabilities
+
+        Args:
+            user_id: WhatsApp user ID
+            image_base64: Base64-encoded image data
+            mime_type: Image MIME type (e.g., 'image/jpeg')
+            caption: Optional caption text accompanying the image
+            prompt_variables: Optional dictionary of variables to pass to the prompt
+
+        Returns:
+            AI-generated response text
+        """
+        try:
+            # Get or create conversation (use caption or default text for context)
+            context_text = caption if caption else "User sent an image"
+            conversation_id = self.get_or_create_conversation(user_id, context_text)
+
+            logger.info(f"Generating image response for user {user_id}")
+            if caption:
+                logger.info(f"Image caption: {caption}")
+
+            # Log variables if provided
+            if prompt_variables:
+                logger.debug(f"Prompt variables: {prompt_variables}")
+
+            # Build multimodal input array
+            input_content = []
+
+            # Add caption as text if present
+            if caption:
+                input_content.append({
+                    "type": "input_text",
+                    "text": caption
+                })
+            else:
+                # Default text when no caption
+                input_content.append({
+                    "type": "input_text",
+                    "text": "Analizza la seguente immagine ed aiutami in base al contesto della conversazione ed a quello che mi serve"
+                })
+
+            # Add image data
+            input_content.append({
+                "type": "input_image",
+                "image_url": f"data:{mime_type};base64,{image_base64}"
+            })
+
+            # Build prompt configuration
+            prompt_config = {"id": self.prompt_id}
+
+            # Add variables if provided
+            if prompt_variables:
+                prompt_config["variables"] = prompt_variables
+
+            # Generate response using gpt-4o for vision support
+            logger.info("Calling OpenAI with gpt-4o for image analysis...")
+            response = self.client.responses.create(
+                prompt=prompt_config,
+                input=[{"role": "user", "content": input_content}],
+                model="gpt-4o",  # Use gpt-4o for vision capabilities
+                conversation=conversation_id
+            )
+
+            # Get the output text
+            output_text = response.output_text
+
+            # Log safely with proper encoding
+            log_preview = output_text[:100] if len(output_text) > 100 else output_text
+            logger.info(f"Generated image response: {log_preview}...")
+            return output_text
+
+        except Exception as e:
+            logger.error(f"Error generating image response: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Return a fallback message
+            return "I apologize, but I'm having trouble analyzing your image right now. Please try again."
+
     def reset_conversation(self, user_id: str) -> bool:
         """
         Reset a user's conversation by creating a new one

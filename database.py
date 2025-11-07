@@ -142,6 +142,21 @@ class DatabaseManager:
                 )
             """)
 
+            # Image messages table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS image_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT NOT NULL,
+                    whatsapp_message_id TEXT UNIQUE NOT NULL,
+                    media_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    mime_type TEXT,
+                    caption TEXT,
+                    ai_analysis TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_phone 
@@ -168,6 +183,17 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_audio_messages_timestamp
                 ON audio_messages(created_at)
+            """)
+
+            # Index for image messages
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_image_messages_phone
+                ON image_messages(phone_number)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_image_messages_timestamp
+                ON image_messages(created_at)
             """)
 
             # Canned responses table for slash commands
@@ -767,6 +793,74 @@ class DatabaseManager:
                 WHERE id = ?
             """, (transcribed_text, audio_id))
             logger.info(f"Updated transcription for audio message {audio_id}")
+
+    # === Image Messages Methods ===
+
+    def save_image_message(self, phone_number: str, whatsapp_message_id: str, media_id: str,
+                          file_path: str, mime_type: str, caption: Optional[str] = None) -> int:
+        """Save image message metadata to database and return image_id"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO image_messages
+                (phone_number, whatsapp_message_id, media_id, file_path, mime_type, caption)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (phone_number, whatsapp_message_id, media_id, file_path, mime_type, caption))
+            image_id = cursor.lastrowid
+            logger.info(f"Saved image message metadata for {phone_number} (image_id: {image_id})")
+            return image_id
+
+    def get_image_messages(self, phone_number: str, limit: Optional[int] = None) -> List[Dict]:
+        """Get image messages for a phone number"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if limit:
+                cursor.execute("""
+                    SELECT id, whatsapp_message_id, media_id, file_path, mime_type,
+                           caption, ai_analysis, created_at
+                    FROM image_messages
+                    WHERE phone_number = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (phone_number, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, whatsapp_message_id, media_id, file_path, mime_type,
+                           caption, ai_analysis, created_at
+                    FROM image_messages
+                    WHERE phone_number = ?
+                    ORDER BY created_at
+                """, (phone_number,))
+
+            image_messages = []
+            for row in cursor.fetchall():
+                image_messages.append({
+                    'id': row['id'],
+                    'whatsapp_message_id': row['whatsapp_message_id'],
+                    'media_id': row['media_id'],
+                    'file_path': row['file_path'],
+                    'mime_type': row['mime_type'],
+                    'caption': row['caption'],
+                    'ai_analysis': row['ai_analysis'],
+                    'created_at': row['created_at']
+                })
+
+            # If we used limit, reverse to get chronological order
+            if limit:
+                image_messages.reverse()
+
+            return image_messages
+
+    def update_image_analysis(self, image_id: int, analysis: str):
+        """Update image message with AI analysis"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE image_messages
+                SET ai_analysis = ?
+                WHERE id = ?
+            """, (analysis, image_id))
+            logger.info(f"Updated AI analysis for image message {image_id}")
 
     # === Canned Responses Methods ===
 

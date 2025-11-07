@@ -24,6 +24,9 @@ audio/
 *.amr
 *.mp3
 
+# Image files from WhatsApp users
+images/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -90,3 +93,6 @@ temp/
 ngrok
 ngrok.exe
 ngrok.yml
+
+# WhatsApp API examples
+whatsapp-api-examples/

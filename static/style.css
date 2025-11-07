@@ -290,6 +290,38 @@ body, html {
     margin-top: 4px;
 }
 
+/* Image message styling */
+.message-bubble.image-message {
+    padding: 4px;
+    max-width: 400px;
+}
+
+.chat-image {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+}
+
+.chat-image:hover {
+    opacity: 0.95;
+}
+
+.image-caption {
+    padding: 8px;
+    font-size: 14px;
+    line-height: 1.45;
+    word-wrap: break-word;
+}
+
+.image-message .message-time {
+    padding: 0 8px 4px 8px;
+    margin-top: 0;
+}
+
 .message-time {
     font-size: 11px;
     color: var(--muted);

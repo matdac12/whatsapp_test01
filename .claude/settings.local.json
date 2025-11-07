@@ -6,7 +6,14 @@
       "Bash(python3 -m pip install:*)",
       "Bash(python3:*)",
       "Bash(git rm:*)",
-      "Read(//mnt/c/Users/MattiaDaCampo/OneDrive - Be Digital Consulting Srl/Kanban_Project/kanbanlite/**)"
+      "Read(//mnt/c/Users/MattiaDaCampo/OneDrive - Be Digital Consulting Srl/Kanban_Project/kanbanlite/**)",
+      "Bash(curl:*)",
+      "Bash(python -c:*)",
+      "WebSearch",
+      "WebFetch(domain:developers.facebook.com)",
+      "Bash(git add:*)",
+      "Bash(git log:*)",
+      "Bash(python -m py_compile:*)"
     ],
     "deny": [],
     "ask": []

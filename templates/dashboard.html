@@ -421,18 +421,20 @@
                 container.innerHTML = renderMessagesSkeleton();
             }
 
-            // Fetch both text messages and audio messages in parallel
+            // Fetch text, audio, and image messages in parallel
             Promise.all([
                 fetch(`/api/messages/${phone}`).then(r => r.json()),
-                fetch(`/api/audio/${phone}`).then(r => r.json())
+                fetch(`/api/audio/${phone}`).then(r => r.json()),
+                fetch(`/api/images/${phone}`).then(r => r.json())
             ])
-                .then(([textMessages, audioMessages]) => {
+                .then(([textMessages, audioMessages, imageMessages]) => {
                     // Tag message types
                     const taggedTextMessages = textMessages.map(msg => ({...msg, type: 'text'}));
                     const taggedAudioMessages = audioMessages.map(msg => ({...msg, type: 'audio', sender: 'user'}));
+                    const taggedImageMessages = imageMessages.map(msg => ({...msg, type: 'image', sender: 'user'}));
 
                     // Merge and sort by timestamp
-                    const allMessages = [...taggedTextMessages, ...taggedAudioMessages]
+                    const allMessages = [...taggedTextMessages, ...taggedAudioMessages, ...taggedImageMessages]
                         .sort((a, b) => new Date(a.timestamp || a.created_at) - new Date(b.timestamp || b.created_at));
 
                     if (incremental && renderedCountByPhone[phone] != null) {
@@ -643,7 +645,7 @@
 
                 const time = new Date(msgTimestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
 
-                // Render audio or text message
+                // Render audio, image, or text message
                 if (msg.type === 'audio') {
                     // Handle both Windows (\) and Unix (/) path separators
                     const filename = msg.file_path.split(/[/\\]/).pop();
@@ -658,6 +660,29 @@
                                 <source src="/audio/${filename}" type="${msg.mime_type}">
                                 Your browser does not support audio playback.
                             </audio>
+                            <small class="message-time">${time}</small>
+                        </div>
+                    `;
+                } else if (msg.type === 'image') {
+                    // Extract filename from file_path
+                    const filename = msg.file_path.split(/[/\\]/).pop();
+                    // Use currentPhone from the outer scope instead of msg.phone_number
+                    const imageUrl = `/images/${currentPhone}/${filename}`;
+
+                    console.log('Image message:', {
+                        file_path: msg.file_path,
+                        filename: filename,
+                        currentPhone: currentPhone,
+                        imageUrl: imageUrl
+                    });
+
+                    // Show caption if present
+                    const captionHtml = msg.caption ? `<div class="image-caption">${formatWhatsAppMessage(msg.caption)}</div>` : '';
+
+                    messageDiv.innerHTML = `
+                        <div class="message-bubble image-message">
+                            <img src="${imageUrl}" alt="Image" class="chat-image" loading="lazy" onerror="console.error('Failed to load image:', this.src)" />
+                            ${captionHtml}
                             <small class="message-time">${time}</small>
                         </div>
                     `;
@@ -732,7 +757,7 @@
                 }
                 const time = new Date(msgTimestamp).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
 
-                // Render audio or text message
+                // Render audio, image, or text message
                 if (msg.type === 'audio') {
                     // Handle both Windows (\) and Unix (/) path separators
                     const filename = msg.file_path.split(/[/\\]/).pop();
@@ -747,6 +772,29 @@
                                 <source src="/audio/${filename}" type="${msg.mime_type}">
                                 Your browser does not support audio playback.
                             </audio>
+                            <small class="message-time">${time}</small>
+                        </div>
+                    `;
+                } else if (msg.type === 'image') {
+                    // Extract filename from file_path
+                    const filename = msg.file_path.split(/[/\\]/).pop();
+                    // Use currentPhone from the outer scope instead of msg.phone_number
+                    const imageUrl = `/images/${currentPhone}/${filename}`;
+
+                    console.log('Image message:', {
+                        file_path: msg.file_path,
+                        filename: filename,
+                        currentPhone: currentPhone,
+                        imageUrl: imageUrl
+                    });
+
+                    // Show caption if present
+                    const captionHtml = msg.caption ? `<div class="image-caption">${formatWhatsAppMessage(msg.caption)}</div>` : '';
+
+                    messageDiv.innerHTML = `
+                        <div class="message-bubble image-message">
+                            <img src="${imageUrl}" alt="Image" class="chat-image" loading="lazy" onerror="console.error('Failed to load image:', this.src)" />
+                            ${captionHtml}
                             <small class="message-time">${time}</small>
                         </div>
                     `;

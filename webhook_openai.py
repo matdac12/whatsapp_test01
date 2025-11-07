@@ -347,6 +347,121 @@ def transcribe_audio(audio_file_path):
         logger.error(f"Transcription error: {e}")
         return None
 
+def download_whatsapp_image(media_id):
+    """
+    Download image from WhatsApp Cloud API
+
+    Args:
+        media_id: The media ID from the webhook payload (image.id)
+
+    Returns:
+        tuple: (image_bytes, mime_type) or (None, None) on error
+    """
+    if not WHATSAPP_TOKEN:
+        logger.error("WhatsApp token not configured")
+        return None, None
+
+    try:
+        # Step 1: Get the media URL
+        url = f"https://graph.facebook.com/{API_VERSION}/{media_id}/"
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+        }
+
+        logger.info(f"Fetching media URL for image {media_id}...")
+        response = make_request_with_retry('GET', url, headers)
+
+        if response is None or response.status_code != 200:
+            logger.error(f"Failed to get media URL: {response.text if response else 'No response'}")
+            return None, None
+
+        media_info = response.json()
+        download_url = media_info.get('url')
+        mime_type = media_info.get('mime_type', 'image/jpeg')
+        file_size = media_info.get('file_size', 0)
+
+        if not download_url:
+            logger.error("No download URL in response")
+            return None, None
+
+        logger.info(f"Media URL retrieved. Size: {file_size} bytes, Type: {mime_type}")
+
+        # Step 2: Download the actual image file
+        logger.info(f"Downloading image from {download_url[:50]}...")
+
+        # Use longer timeout for download (30 seconds)
+        image_response = make_request_with_retry(
+            'GET',
+            download_url,
+            headers,
+            timeout=(3, 30)
+        )
+
+        if image_response is None or image_response.status_code != 200:
+            logger.error(f"Failed to download image: {image_response.status_code if image_response else 'No response'}")
+            return None, None
+
+        logger.info(f"✅ Image downloaded: {len(image_response.content)} bytes, {mime_type}")
+        return image_response.content, mime_type
+
+    except Exception as e:
+        logger.error(f"Error downloading image: {e}")
+        return None, None
+
+def save_image_locally(image_bytes, phone_number, message_id, mime_type):
+    """
+    Save image bytes to local disk
+
+    Args:
+        image_bytes: Binary image data
+        phone_number: Sender's phone number
+        message_id: WhatsApp message ID
+        mime_type: Image MIME type
+
+    Returns:
+        str: File path or None on error
+    """
+    try:
+        # Determine file extension from MIME type
+        extension_map = {
+            'image/jpeg': 'jpg',
+            'image/jpg': 'jpg',
+            'image/png': 'png',
+            'image/gif': 'gif',
+            'image/webp': 'webp',
+            'image/bmp': 'bmp'
+        }
+
+        file_extension = extension_map.get(mime_type, 'jpg')
+
+        # Create images directory if it doesn't exist
+        images_dir = 'images'
+        if not os.path.exists(images_dir):
+            os.makedirs(images_dir)
+            logger.info(f"Created images directory: {images_dir}")
+
+        # Create user-specific subdirectory
+        user_dir = os.path.join(images_dir, phone_number)
+        if not os.path.exists(user_dir):
+            os.makedirs(user_dir)
+            logger.info(f"Created user image directory: {user_dir}")
+
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{timestamp}_{message_id}.{file_extension}"
+        filepath = os.path.join(user_dir, filename)
+
+        # Save image to file
+        with open(filepath, 'wb') as f:
+            f.write(image_bytes)
+
+        logger.info(f"✅ Image saved: {filepath} ({len(image_bytes)} bytes)")
+        return filepath
+
+    except Exception as e:
+        logger.error(f"Error saving image: {e}")
+        return None
+
 @app.route('/webhook', methods=['GET'])
 @app.route('/', methods=['GET'])
 def verify_webhook():
@@ -454,8 +569,47 @@ def process_message(message, contacts):
         handle_ai_conversation(msg_from, text, contact_name)
     
     elif msg_type == 'image':
-        logger.info(f"   Image received")
-        send_whatsapp_message(msg_from, "I received your image! Currently, I can only process text messages. Please send me a text message and I'll be happy to help! 📸")
+        image_data = message.get('image', {})
+        media_id = image_data.get('id')
+        caption = image_data.get('caption', '')
+        mime_type = image_data.get('mime_type', 'unknown')
+
+        logger.info(f"   Image received ({mime_type})")
+        if caption:
+            logger.info(f"   Caption: {caption}")
+
+        # Download image file
+        image_bytes, mime = download_whatsapp_image(media_id)
+
+        if image_bytes:
+            # Save image to disk
+            filepath = save_image_locally(image_bytes, msg_from, msg_id, mime)
+
+            if filepath:
+                # Save metadata to database and get image_id
+                image_id = db.save_image_message(
+                    phone_number=msg_from,
+                    whatsapp_message_id=msg_id,
+                    media_id=media_id,
+                    file_path=filepath,
+                    mime_type=mime,
+                    caption=caption
+                )
+
+                # Process image with AI
+                handle_ai_image_conversation(msg_from, image_bytes, mime, caption, contact_name, image_id)
+            else:
+                logger.error("Failed to save image locally")
+                send_whatsapp_message(
+                    msg_from,
+                    "I received your image but couldn't save it. Please try again."
+                )
+        else:
+            logger.error("Failed to download image")
+            send_whatsapp_message(
+                msg_from,
+                "I couldn't download your image. Could you please try sending it again?"
+            )
     
     elif msg_type == 'audio':
         audio_data = message.get('audio', {})
@@ -671,6 +825,144 @@ def handle_ai_conversation(sender, text, contact_name):
         logger.error(f"Traceback: {traceback.format_exc()}")
         send_whatsapp_message(sender, "I encountered an error while processing your message. Please try again or type /reset to start over.")
 
+def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contact_name, image_id):
+    """
+    Handle image conversation with OpenAI vision capabilities
+    """
+    # Check if AI manager is available
+    if not ai_manager or not data_extractor:
+        logger.error("OpenAI manager or data extractor not initialized")
+        send_whatsapp_message(sender, "I'm sorry, but I'm having technical difficulties. Please try again later.")
+        return
+
+    try:
+        logger.info(f"🤖 Processing image from {sender}")
+
+        # Convert image to base64
+        import base64
+        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+
+        # STEP 1: Get conversation and check if profile is already complete
+        # Use caption or default text for conversation context
+        context_text = caption if caption else "User sent an image"
+        conversation_id = ai_manager.get_or_create_conversation(sender, context_text)
+
+        # Check if we already have a complete profile
+        existing_profile = data_extractor.get_profile_status(sender)
+
+        if existing_profile and existing_profile['complete']:
+            # Profile is already complete
+            logger.info(f"✅ Using complete profile for {sender}")
+
+            def normalize_field(value):
+                """Convert empty strings to None for Pydantic validation"""
+                return value if value and str(value).strip() else None
+
+            from data_models import ClientInfo
+            client_info = ClientInfo(
+                name=normalize_field(existing_profile['data']['name']),
+                last_name=normalize_field(existing_profile['data']['last_name']),
+                ragione_sociale=normalize_field(existing_profile['data']['ragione_sociale']),
+                email=normalize_field(existing_profile['data']['email']),
+                found_all_info=True,
+                what_is_missing=None
+            )
+            is_newly_complete = False
+        else:
+            # Try to extract data from caption if present
+            if caption:
+                client_info, is_newly_complete = data_extractor.process_message(sender, caption, conversation_id)
+            else:
+                # No caption, can't extract data
+                from data_models import ClientInfo
+                profile = existing_profile['data'] if existing_profile else {}
+
+                def normalize_field(value):
+                    return value if value and str(value).strip() else None
+
+                client_info = ClientInfo(
+                    name=normalize_field(profile.get('name')),
+                    last_name=normalize_field(profile.get('last_name')),
+                    ragione_sociale=normalize_field(profile.get('ragione_sociale')),
+                    email=normalize_field(profile.get('email')),
+                    found_all_info=False,
+                    what_is_missing=existing_profile.get('missing', '') if existing_profile else ''
+                )
+                is_newly_complete = False
+
+        # Log current profile state
+        logger.info(f"📝 Profile status: {data_extractor.format_extraction_summary(client_info)}")
+
+        # STEP 2: Prepare variables for prompt
+        contact_notes = db.get_notes(sender) or ""
+        prompt_variables = {
+            "client_name": client_info.name or "non_fornito",
+            "client_lastname": client_info.last_name or "non_fornito",
+            "client_company": client_info.ragione_sociale or "non_fornito",
+            "client_email": client_info.email or "non_fornito",
+            "completion_status": "Profilo completo ✅" if client_info.found_all_info else "Profilo incompleto 📝",
+            "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}",
+            "agent_notes": contact_notes
+        }
+
+        # Special handling for newly completed profiles
+        if is_newly_complete:
+            prompt_variables["completion_status"] = "Profilo appena completato! ✅"
+            prompt_variables["missing_fields_instruction"] = "Ringrazia il cliente per aver fornito tutte le informazioni."
+            logger.info(f"✅ Profile completed for {sender}")
+
+        logger.info(f"📝 Prompt variables: Status={prompt_variables['completion_status']}")
+
+        # Generate AI response with image (this will use gpt-4o)
+        ai_response = ai_manager.generate_response_with_image(
+            user_id=sender,
+            image_base64=image_base64,
+            mime_type=mime_type,
+            caption=caption,
+            prompt_variables=prompt_variables
+        )
+
+        # Update conversation with extracted data if significant info was found
+        if any([client_info.name, client_info.last_name, client_info.ragione_sociale, client_info.email]):
+            client_info_json = client_info.json(exclude={'found_all_info', 'what_is_missing'})
+            ai_manager.update_conversation_with_data(sender, client_info_json)
+
+        # Save AI analysis to database
+        if ai_response:
+            db.update_image_analysis(image_id, ai_response)
+
+        # STEP 3: Send response to user or store as draft based on manual mode
+        settings = db.get_settings(sender)
+        manual_mode = bool(settings.get('manual_mode'))
+
+        if ai_response:
+            if manual_mode:
+                # Save draft and do not send
+                db.save_ai_draft(sender, ai_response)
+                logger.info(f"📝 Draft stored for +{sender} (Manuale ON)")
+            else:
+                # Clear any existing draft before sending automatic response
+                db.clear_ai_draft(sender)
+
+                # Split long messages if needed
+                if len(ai_response) > 4000:
+                    chunks = [ai_response[i:i+4000] for i in range(0, len(ai_response), 4000)]
+                    for chunk in chunks:
+                        send_whatsapp_message(sender, chunk)
+                else:
+                    send_whatsapp_message(sender, ai_response)
+                logger.info(f"✅ AI image response sent to {contact_name}")
+        else:
+            logger.error("No response generated from AI")
+            if not manual_mode:
+                send_whatsapp_message(sender, "I apologize, but I couldn't analyze your image. Please try again.")
+
+    except Exception as e:
+        logger.error(f"Error in AI image conversation: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        send_whatsapp_message(sender, "I encountered an error while processing your image. Please try again.")
+
 def process_status(status):
     """
     Process a message status update
@@ -723,6 +1015,45 @@ def dashboard():
     """
     return render_template('dashboard.html')
 
+@app.route('/images/<phone>/<filename>')
+def serve_image(phone, filename):
+    """
+    Serve image files for dashboard display
+    """
+    try:
+        from flask import send_from_directory
+        import os
+
+        logger.info(f"Image request: phone={phone}, filename={filename}")
+
+        # Construct the path to the image
+        image_dir = os.path.join('images', phone)
+        logger.info(f"Looking for image in: {image_dir}")
+
+        # Security: Check if directory exists and file exists
+        if not os.path.exists(image_dir):
+            logger.warning(f"Image directory not found: {image_dir}")
+            # List what directories DO exist
+            if os.path.exists('images'):
+                logger.info(f"Available phone directories: {os.listdir('images')}")
+            return "Image not found", 404
+
+        file_path = os.path.join(image_dir, filename)
+        if not os.path.exists(file_path):
+            logger.warning(f"Image file not found: {file_path}")
+            # List what files DO exist in this directory
+            logger.info(f"Available files in {image_dir}: {os.listdir(image_dir)}")
+            return "Image not found", 404
+
+        logger.info(f"✅ Serving image: {file_path}")
+        # Serve the file
+        return send_from_directory(image_dir, filename)
+    except Exception as e:
+        logger.error(f"Error serving image: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return "Error loading image", 500
+
 @app.route('/api/conversations')
 def api_get_conversations():
     """
@@ -746,6 +1077,14 @@ def api_get_message_statuses(phone):
     """
     statuses = db.get_message_statuses(phone)
     return jsonify(statuses)
+
+@app.route('/api/images/<phone>')
+def api_get_images(phone):
+    """
+    API endpoint to get image messages for a specific phone number
+    """
+    images = db.get_image_messages(phone)
+    return jsonify(images)
 
 @app.route('/api/send', methods=['POST'])
 def api_send_message():
