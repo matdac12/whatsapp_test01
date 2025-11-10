@@ -95,4 +95,5 @@ ngrok.exe
 ngrok.yml
 
 # WhatsApp API examples
-whatsapp-api-examples/
+whatsapp-api-examples/logs/
+logs/

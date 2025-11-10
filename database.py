@@ -26,7 +26,7 @@ class DatabaseManager:
         self.db_path = db_path
         self.local = threading.local()
         self._create_tables()
-        logger.info(f"Database initialized at {db_path}")
+        logger.debug(f"Database initialized at {db_path}")
     
     @contextmanager
     def get_connection(self):
@@ -551,7 +551,7 @@ class DatabaseManager:
                 WHERE processed_at < datetime('now', '-' || ? || ' days')
             """, (days_to_keep,))
             deleted_count = cursor.rowcount
-            logger.info(f"Cleaned up {deleted_count} old processed message records")
+            logger.debug(f"Cleaned up {deleted_count} old processed message records")
             return deleted_count
     
     def add_message(self, phone_number: str, sender: str, message: str, timestamp: Optional[str] = None, whatsapp_message_id: Optional[str] = None):
@@ -581,7 +581,7 @@ class DatabaseManager:
                 """, (status, whatsapp_message_id))
 
                 if cursor.rowcount > 0:
-                    logger.info(f"Updated message {whatsapp_message_id} status to: {status}")
+                    logger.debug(f"Updated message {whatsapp_message_id} status to: {status}")
                     return True
                 return False
         except Exception as e:
@@ -924,7 +924,7 @@ class DatabaseManager:
             """, (phone_number, whatsapp_message_id, media_id, file_path, mime_type,
                   file_extension, 1 if is_voice else 0, duration))
             audio_id = cursor.lastrowid
-            logger.info(f"Saved audio message metadata for {phone_number} (audio_id: {audio_id})")
+            logger.debug(f"Saved audio message metadata for {phone_number} (audio_id: {audio_id})")
             return audio_id
 
     def get_audio_messages(self, phone_number: str, limit: Optional[int] = None) -> List[Dict]:
@@ -982,7 +982,7 @@ class DatabaseManager:
                 SET transcribed_text = ?, transcribed_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (transcribed_text, audio_id))
-            logger.info(f"Updated transcription for audio message {audio_id}")
+            logger.debug(f"Updated transcription for audio message {audio_id}")
 
     # === Image Messages Methods ===
 
@@ -997,7 +997,7 @@ class DatabaseManager:
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (phone_number, whatsapp_message_id, media_id, file_path, mime_type, caption))
             image_id = cursor.lastrowid
-            logger.info(f"Saved image message metadata for {phone_number} (image_id: {image_id})")
+            logger.debug(f"Saved image message metadata for {phone_number} (image_id: {image_id})")
             return image_id
 
     def get_image_messages(self, phone_number: str, limit: Optional[int] = None) -> List[Dict]:
@@ -1050,7 +1050,7 @@ class DatabaseManager:
                 SET ai_analysis = ?
                 WHERE id = ?
             """, (analysis, image_id))
-            logger.info(f"Updated AI analysis for image message {image_id}")
+            logger.debug(f"Updated AI analysis for image message {image_id}")
 
     # === Canned Responses Methods ===
 

@@ -44,11 +44,11 @@ class OpenAIConversationManager:
             # Load existing conversations from database
             self.load_conversations()
             
-            logger.info(f"OpenAI Conversation Manager initialized")
-            logger.info(f"Model: {self.model}")
-            logger.info(f"Prompt ID: {self.prompt_id[:20]}...")
-            logger.info(f"API Key: {api_key[:20]}...")
-            logger.info(f"Loaded {len(self.conversations)} existing conversations")
+            logger.debug(f"OpenAI Conversation Manager initialized")
+            logger.debug(f"Model: {self.model}")
+            logger.debug(f"Prompt ID: {self.prompt_id[:20]}...")
+            logger.debug(f"API Key: {api_key[:20]}...")
+            logger.debug(f"Loaded {len(self.conversations)} existing conversations")
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {e}")
             import traceback
@@ -59,7 +59,7 @@ class OpenAIConversationManager:
         """Load existing conversations from database"""
         try:
             self.conversations = db.get_all_conversations()
-            logger.info(f"Loaded {len(self.conversations)} conversations from database")
+            logger.debug(f"Loaded {len(self.conversations)} conversations from database")
         except Exception as e:
             logger.error(f"Error loading conversations from database: {e}")
             self.conversations = {}
@@ -86,29 +86,29 @@ class OpenAIConversationManager:
             OpenAI conversation ID
         """
         if user_id in self.conversations:
-            logger.info(f"Found existing conversation for user {user_id}: {self.conversations[user_id]}")
+            logger.debug(f"Found existing conversation for user {user_id}")
             return self.conversations[user_id]
-        
+
         try:
             # Create new conversation as per the guide
             if initial_message:
                 # Initialize with the first message - ensure proper encoding
                 initial_message_safe = initial_message.encode('utf-8', errors='ignore').decode('utf-8')
-                logger.info(f"Creating conversation with initial message")
+                logger.debug(f"Creating conversation with initial message")
                 conversation = self.client.conversations.create(
                     items=[{"type": "message", "role": "user", "content": initial_message_safe}]
                 )
             else:
                 # Create empty conversation
-                logger.info(f"Creating empty conversation")
+                logger.debug(f"Creating empty conversation")
                 conversation = self.client.conversations.create()
-            
+
             conversation_id = conversation.id
             self.conversations[user_id] = conversation_id
             # Save only this single conversation, not all
             db.save_conversation(user_id, conversation_id)
-            
-            logger.info(f"Created new conversation for user {user_id}: {conversation_id}")
+
+            logger.debug(f"Created new conversation for user {user_id}: {conversation_id}")
             return conversation_id
             
         except Exception as e:
@@ -137,13 +137,13 @@ class OpenAIConversationManager:
             # Get or create conversation
             conversation_id = self.get_or_create_conversation(user_id, message)
             
-            logger.info(f"Generating response for user {user_id}")
+            logger.debug(f"Generating response for user {user_id}")
             # Safely log the message
             try:
-                logger.info(f"User message: {message}")
+                logger.debug(f"User message: {message}")
             except:
-                logger.info(f"User message: [Contains special characters]")
-            
+                logger.debug(f"User message: [Contains special characters]")
+
             # Log variables if provided
             if prompt_variables:
                 logger.debug(f"Prompt variables: {prompt_variables}")
@@ -169,10 +169,10 @@ class OpenAIConversationManager:
             
             # Get the output text
             output_text = response.output_text
-            
+
             # Log safely with proper encoding
             log_preview = output_text[:100] if len(output_text) > 100 else output_text
-            logger.info(f"Generated response: {log_preview}...")
+            logger.debug(f"Generated response: {log_preview}...")
             return output_text
             
         except Exception as e:
@@ -201,9 +201,9 @@ class OpenAIConversationManager:
             context_text = caption if caption else "User sent an image"
             conversation_id = self.get_or_create_conversation(user_id, context_text)
 
-            logger.info(f"Generating image response for user {user_id}")
+            logger.debug(f"Generating image response for user {user_id}")
             if caption:
-                logger.info(f"Image caption: {caption}")
+                logger.debug(f"Image caption: {caption}")
 
             # Log variables if provided
             if prompt_variables:
@@ -239,7 +239,7 @@ class OpenAIConversationManager:
                 prompt_config["variables"] = prompt_variables
 
             # Generate response using gpt-4o for vision support
-            logger.info("Calling OpenAI with gpt-4o for image analysis...")
+            logger.debug("Calling OpenAI with gpt-4o for image analysis")
             response = self.client.responses.create(
                 prompt=prompt_config,
                 input=[{"role": "user", "content": input_content}],
@@ -252,7 +252,7 @@ class OpenAIConversationManager:
 
             # Log safely with proper encoding
             log_preview = output_text[:100] if len(output_text) > 100 else output_text
-            logger.info(f"Generated image response: {log_preview}...")
+            logger.debug(f"Generated image response: {log_preview}...")
             return output_text
 
         except Exception as e:
@@ -280,19 +280,19 @@ class OpenAIConversationManager:
                 # As mentioned in the guide, we can delete conversations
                 try:
                     self.client.conversations.delete(old_conversation_id)
-                    logger.info(f"Deleted old conversation: {old_conversation_id}")
+                    logger.debug(f"Deleted old conversation: {old_conversation_id}")
                 except Exception as e:
                     logger.warning(f"Could not delete old conversation: {e}")
-                
+
                 # Remove from our tracking
                 del self.conversations[user_id]
                 db.delete_conversation(user_id)
                 # No need to save all conversations - we already deleted the one we needed
-                
-                logger.info(f"Reset conversation for user {user_id}")
+
+                logger.debug(f"Reset conversation for user {user_id}")
                 return True
             else:
-                logger.info(f"No conversation to reset for user {user_id}")
+                logger.debug(f"No conversation to reset for user {user_id}")
                 return True
                 
         except Exception as e:

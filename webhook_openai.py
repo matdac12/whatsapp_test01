@@ -21,19 +21,9 @@ from data_extractor import DataExtractor
 from data_models import ClientInfo
 from database import db
 
-# Configure logging with UTF-8 support
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Note: Logging is already configured by start_openai_bot.py via logging_config
+# If running standalone, logging_config.setup_logging() will be called below
 logger = logging.getLogger(__name__)
-
-# Silence werkzeug HTTP request logs (only show warnings/errors)
-# This prevents log spam from dashboard API polling every 2 seconds
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # Create Flask app
 app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -68,21 +58,21 @@ if OPENAI_API_KEY and OPENAI_PROMPT_ID:
             prompt_id=OPENAI_PROMPT_ID,
             model=OPENAI_MODEL
         )
-        logger.info("✅ OpenAI Conversation Manager initialized successfully")
-        
+        logger.info("OpenAI Conversation Manager initialized")
+
         # Initialize Data Extractor
         data_extractor = DataExtractor(
             api_key=OPENAI_API_KEY,
             model="gpt-4o"  # Using gpt-4o for structured output parsing
         )
-        logger.info("✅ Data Extractor initialized successfully")
-        
+        logger.info("Data Extractor initialized")
+
     except Exception as e:
-        logger.error(f"❌ Failed to initialize OpenAI: {e}")
+        logger.error(f"Failed to initialize OpenAI: {e}")
         ai_manager = None
         data_extractor = None
 else:
-    logger.warning("⚠️  OpenAI credentials not configured")
+    logger.warning("OpenAI credentials not configured")
 
 def make_request_with_retry(method, url, headers, json_data=None, timeout=REQUEST_TIMEOUT):
     """
@@ -119,22 +109,22 @@ def make_request_with_retry(method, url, headers, json_data=None, timeout=REQUES
             # Check for rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get('Retry-After', RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF)-1)]))
-                logger.warning(f"Rate limited. Waiting {retry_after}s before retry...")
+                logger.warning(f"Rate limited, waiting {retry_after}s")
                 time.sleep(retry_after)
                 continue
-            
+
             # Success or client error (don't retry on 4xx except 429)
             if response.status_code < 500:
                 return response
-                
+
             # Server error (5xx) - retry
-            logger.warning(f"Server error {response.status_code}, attempt {attempt + 1}/{MAX_RETRIES}")
-            
+            logger.debug(f"Server error {response.status_code}, attempt {attempt + 1}/{MAX_RETRIES}")
+
         except requests.Timeout:
-            logger.warning(f"Request timeout, attempt {attempt + 1}/{MAX_RETRIES}")
+            logger.debug(f"Request timeout, attempt {attempt + 1}/{MAX_RETRIES}")
             last_error = "timeout"
         except requests.ConnectionError:
-            logger.warning(f"Connection error, attempt {attempt + 1}/{MAX_RETRIES}")
+            logger.debug(f"Connection error, attempt {attempt + 1}/{MAX_RETRIES}")
             last_error = "connection"
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
@@ -181,7 +171,7 @@ def send_whatsapp_message(to_number, message_text):
     
     if response.status_code == 200:
         result = response.json()
-        logger.info(f"✅ Message sent to +{to_number}")
+        logger.debug(f"Message sent to +{to_number}")
 
         # Extract WhatsApp message ID from response
         whatsapp_msg_id = None
@@ -245,7 +235,7 @@ def download_whatsapp_audio(media_id):
             "Authorization": f"Bearer {WHATSAPP_TOKEN}"
         }
 
-        logger.info(f"Fetching media URL for {media_id}...")
+        logger.debug(f"Fetching media URL for {media_id}")
         response = make_request_with_retry('GET', url, headers)
 
         if response is None or response.status_code != 200:
@@ -261,10 +251,10 @@ def download_whatsapp_audio(media_id):
             logger.error("No download URL in response")
             return None, None, None
 
-        logger.info(f"Media URL retrieved. Size: {file_size} bytes, Type: {mime_type}")
+        logger.debug(f"Media URL retrieved: {file_size} bytes, {mime_type}")
 
         # Step 2: Download the actual audio file
-        logger.info(f"Downloading audio from {download_url[:50]}...")
+        logger.debug(f"Downloading audio from {download_url[:50]}...")
 
         # Use longer timeout for download (30 seconds)
         audio_response = make_request_with_retry(
@@ -291,7 +281,7 @@ def download_whatsapp_audio(media_id):
 
         file_extension = extension_map.get(mime_type, 'ogg')
 
-        logger.info(f"✅ Audio downloaded: {len(audio_response.content)} bytes, {mime_type}")
+        logger.debug(f"Audio downloaded: {len(audio_response.content)} bytes, {mime_type}")
         return audio_response.content, mime_type, file_extension
 
     except Exception as e:
@@ -328,7 +318,7 @@ def transcribe_audio(audio_file_path):
             logger.error(f"Audio file too large: {file_size} bytes (25MB max)")
             return None
 
-        logger.info(f"Transcribing audio: {audio_file_path} ({file_size} bytes)")
+        logger.debug(f"Transcribing audio: {audio_file_path} ({file_size} bytes)")
 
         # Transcribe with gpt-4o-transcribe
         with open(audio_file_path, 'rb') as audio_file:
@@ -339,7 +329,7 @@ def transcribe_audio(audio_file_path):
             )
 
         transcribed_text = transcript.strip()
-        logger.info(f"✅ Transcription successful: {transcribed_text[:100]}{'...' if len(transcribed_text) > 100 else ''}")
+        logger.debug(f"Transcription: {transcribed_text[:100]}{'...' if len(transcribed_text) > 100 else ''}")
 
         return transcribed_text
 
@@ -368,7 +358,7 @@ def download_whatsapp_image(media_id):
             "Authorization": f"Bearer {WHATSAPP_TOKEN}"
         }
 
-        logger.info(f"Fetching media URL for image {media_id}...")
+        logger.debug(f"Fetching media URL for image {media_id}")
         response = make_request_with_retry('GET', url, headers)
 
         if response is None or response.status_code != 200:
@@ -384,10 +374,10 @@ def download_whatsapp_image(media_id):
             logger.error("No download URL in response")
             return None, None
 
-        logger.info(f"Media URL retrieved. Size: {file_size} bytes, Type: {mime_type}")
+        logger.debug(f"Media URL retrieved: {file_size} bytes, {mime_type}")
 
         # Step 2: Download the actual image file
-        logger.info(f"Downloading image from {download_url[:50]}...")
+        logger.debug(f"Downloading image from {download_url[:50]}...")
 
         # Use longer timeout for download (30 seconds)
         image_response = make_request_with_retry(
@@ -401,7 +391,7 @@ def download_whatsapp_image(media_id):
             logger.error(f"Failed to download image: {image_response.status_code if image_response else 'No response'}")
             return None, None
 
-        logger.info(f"✅ Image downloaded: {len(image_response.content)} bytes, {mime_type}")
+        logger.debug(f"Image downloaded: {len(image_response.content)} bytes, {mime_type}")
         return image_response.content, mime_type
 
     except Exception as e:
@@ -438,13 +428,13 @@ def save_image_locally(image_bytes, phone_number, message_id, mime_type):
         images_dir = 'images'
         if not os.path.exists(images_dir):
             os.makedirs(images_dir)
-            logger.info(f"Created images directory: {images_dir}")
+            logger.debug(f"Created images directory: {images_dir}")
 
         # Create user-specific subdirectory
         user_dir = os.path.join(images_dir, phone_number)
         if not os.path.exists(user_dir):
             os.makedirs(user_dir)
-            logger.info(f"Created user image directory: {user_dir}")
+            logger.debug(f"Created user image directory: {user_dir}")
 
         # Create filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -455,7 +445,7 @@ def save_image_locally(image_bytes, phone_number, message_id, mime_type):
         with open(filepath, 'wb') as f:
             f.write(image_bytes)
 
-        logger.info(f"✅ Image saved: {filepath} ({len(image_bytes)} bytes)")
+        logger.debug(f"Image saved: {filepath} ({len(image_bytes)} bytes)")
         return filepath
 
     except Exception as e:
@@ -473,12 +463,7 @@ def verify_webhook():
     challenge = request.args.get('hub.challenge')
 
     # Debug logging
-    logger.info(f"Webhook verification attempt:")
-    logger.info(f"  hub.mode: '{mode}'")
-    logger.info(f"  hub.verify_token: '{token}'")
-    logger.info(f"  hub.challenge: '{challenge}'")
-    logger.info(f"  Expected VERIFY_TOKEN: '{VERIFY_TOKEN}'")
-    logger.info(f"  Token match: {token == VERIFY_TOKEN}")
+    logger.debug(f"Webhook verification: mode={mode}, token_match={token == VERIFY_TOKEN}")
 
     if mode == 'subscribe' and token == VERIFY_TOKEN:
         logger.info('WEBHOOK VERIFIED')
@@ -499,7 +484,7 @@ def receive_message():
     body = request.get_json()
 
     # Log the received webhook
-    logger.info(f"\n\nWebhook received {timestamp}\n")
+    logger.debug(f"Webhook received {timestamp}")
     logger.debug(json.dumps(body, indent=2))
 
     # Process the webhook data in a separate thread to respond quickly
@@ -537,15 +522,15 @@ def process_message(message, contacts):
     
     # Check for duplicate processing (deduplication)
     if db.is_message_processed(msg_id):
-        logger.info(f"Message {msg_id} already processed, skipping duplicate")
+        logger.debug(f"Message {msg_id} already processed, skipping duplicate")
         return
-    
+
     # Mark as processed immediately to prevent race conditions
     db.mark_message_processed(msg_id, msg_from)
-    
+
     # Mark message as read
     mark_as_read(msg_id)
-    
+
     # Find contact info
     contact_name = 'User'
     for contact in contacts:
@@ -553,14 +538,17 @@ def process_message(message, contacts):
             profile = contact.get('profile', {})
             contact_name = profile.get('name', 'User')
             break
-    
-    logger.info(f"📨 New message from {contact_name} (+{msg_from})")
-    logger.info(f"   Type: {msg_type}")
-    
+
+    # Visual separator for new conversation
+    logger.info("")  # Blank line for readability
+
     # Handle text messages with OpenAI
     if msg_type == 'text':
         text = message.get('text', {}).get('body', '')
-        logger.info(f"   Text: {text}")
+
+        # Log incoming message with full content
+        logger.info(f"📨 Message from [bold]{contact_name}[/bold] (+{msg_from[-4:]})")
+        logger.info(f"   [cyan]→[/cyan] {text}")
         
         # Add received message to database
         db.add_message(msg_from, "user", text)
@@ -574,9 +562,9 @@ def process_message(message, contacts):
         caption = image_data.get('caption', '')
         mime_type = image_data.get('mime_type', 'unknown')
 
-        logger.info(f"   Image received ({mime_type})")
+        logger.info(f"📷 Image from [bold]{contact_name}[/bold] (+{msg_from[-4:]})")
         if caption:
-            logger.info(f"   Caption: {caption}")
+            logger.info(f"   [cyan]→[/cyan] {caption}")
 
         # Download image file
         image_bytes, mime = download_whatsapp_image(media_id)
@@ -617,7 +605,7 @@ def process_message(message, contacts):
         is_voice = audio_data.get('voice', False)
         mime_type = audio_data.get('mime_type', 'unknown')
 
-        logger.info(f"   Audio: {'Voice message' if is_voice else 'Audio file'} ({mime_type})")
+        logger.info(f"🎤 {'Voice message' if is_voice else 'Audio file'} from [bold]{contact_name}[/bold] (+{msg_from[-4:]})")
 
         # Download audio file
         audio_bytes, mime, ext = download_whatsapp_audio(media_id)
@@ -636,7 +624,7 @@ def process_message(message, contacts):
                 with open(filepath, 'wb') as f:
                     f.write(audio_bytes)
 
-                logger.info(f"✅ Audio saved: {filepath} ({len(audio_bytes)} bytes)")
+                logger.debug(f"Audio saved: {filepath} ({len(audio_bytes)} bytes)")
 
                 # Save metadata to database and get audio_id
                 audio_id = db.save_audio_message(
@@ -653,7 +641,7 @@ def process_message(message, contacts):
                 transcription = transcribe_audio(filepath)
 
                 if transcription:
-                    logger.info(f"📝 Transcription: {transcription[:100]}{'...' if len(transcription) > 100 else ''}")
+                    logger.info(f"   [cyan]→[/cyan] Transcribed: {transcription}")
 
                     # Update database with transcription
                     db.update_audio_transcription(audio_id, transcription)
@@ -688,11 +676,11 @@ def process_message(message, contacts):
         location = message.get('location', {})
         lat = location.get('latitude')
         lon = location.get('longitude')
-        logger.info(f"   Location: {lat}, {lon}")
+        logger.debug(f"Location: {lat}, {lon}")
         send_whatsapp_message(msg_from, f"Thanks for sharing your location! 📍\nI can see you're at coordinates {lat}, {lon}.\nHow can I help you today?")
-    
+
     else:
-        logger.info(f"   Unhandled message type: {msg_type}")
+        logger.debug(f"Unhandled message type: {msg_type}")
         send_whatsapp_message(msg_from, "I received your message! Please send me a text message so I can assist you better.")
 
 def handle_ai_conversation(sender, text, contact_name):
@@ -730,17 +718,17 @@ def handle_ai_conversation(sender, text, contact_name):
                 send_whatsapp_message(sender, command_response)
                 return
         
-        logger.info(f"🤖 Processing message from {sender}")
-        
+        logger.debug(f"Processing with AI: {sender}")
+
         # STEP 1: Get conversation and check if profile is already complete
         conversation_id = ai_manager.get_or_create_conversation(sender, text)
-        
+
         # Check if we already have a complete profile
         existing_profile = data_extractor.get_profile_status(sender)
-        
+
         if existing_profile and existing_profile['complete']:
             # Profile is already complete, no need to extract
-            logger.info(f"✅ Using complete profile for {sender}")
+            logger.debug(f"Using complete profile for {sender}")
 
             # Helper function to normalize empty strings to None
             def normalize_field(value):
@@ -761,8 +749,8 @@ def handle_ai_conversation(sender, text, contact_name):
             client_info, is_newly_complete = data_extractor.process_message(sender, text, conversation_id)
         
         # Log current profile state
-        logger.info(f"📝 Profile status: {data_extractor.format_extraction_summary(client_info)}")
-        
+        logger.debug(f"Profile: {data_extractor.format_extraction_summary(client_info)}")
+
         # STEP 2: Prepare variables for prompt
         # Always include agent_notes based on per-contact notes (may be empty)
         contact_notes = db.get_notes(sender) or ""
@@ -775,14 +763,14 @@ def handle_ai_conversation(sender, text, contact_name):
             "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}",
             "agent_notes": contact_notes
         }
-        
+
         # Special handling for newly completed profiles
         if is_newly_complete:
             prompt_variables["completion_status"] = "Profilo appena completato! ✅"
             prompt_variables["missing_fields_instruction"] = "Ringrazia il cliente per aver fornito tutte le informazioni."
-            logger.info(f"✅ Profile completed for {sender}")
-        
-        logger.info(f"📝 Prompt variables: Status={prompt_variables['completion_status']}")
+            logger.info(f"Profile completed for {sender}")
+
+        logger.debug(f"Prompt status: {prompt_variables['completion_status']}")
         
         # Generate AI response with variables
         ai_response = ai_manager.generate_response(sender, text, prompt_variables)
@@ -801,10 +789,14 @@ def handle_ai_conversation(sender, text, contact_name):
             if manual_mode:
                 # Save draft and do not send
                 db.save_ai_draft(sender, ai_response)
-                logger.info(f"📝 Draft stored for +{sender} (Manuale ON)")
+                logger.info(f"Draft stored for +{sender[-4:]} (manual mode)")
             else:
                 # Clear any existing draft before sending automatic response
                 db.clear_ai_draft(sender)
+
+                # Log AI response before sending
+                logger.info(f"🤖 AI Response for [bold]{contact_name}[/bold]")
+                logger.info(f"   [green]→[/green] {ai_response}")
 
                 # Split long messages if needed
                 if len(ai_response) > 4000:
@@ -813,7 +805,8 @@ def handle_ai_conversation(sender, text, contact_name):
                         send_whatsapp_message(sender, chunk)
                 else:
                     send_whatsapp_message(sender, ai_response)
-                logger.info(f"✅ AI response sent to {contact_name}")
+                logger.info(f"✓ Sent to WhatsApp")
+                logger.info("")  # Blank line after conversation
         else:
             logger.error("No response generated from AI")
             if not manual_mode:
@@ -836,7 +829,7 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
         return
 
     try:
-        logger.info(f"🤖 Processing image from {sender}")
+        logger.debug(f"Processing image from {sender}")
 
         # Convert image to base64
         import base64
@@ -852,7 +845,7 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
 
         if existing_profile and existing_profile['complete']:
             # Profile is already complete
-            logger.info(f"✅ Using complete profile for {sender}")
+            logger.debug(f"Using complete profile for {sender}")
 
             def normalize_field(value):
                 """Convert empty strings to None for Pydantic validation"""
@@ -891,7 +884,7 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
                 is_newly_complete = False
 
         # Log current profile state
-        logger.info(f"📝 Profile status: {data_extractor.format_extraction_summary(client_info)}")
+        logger.debug(f"Profile: {data_extractor.format_extraction_summary(client_info)}")
 
         # STEP 2: Prepare variables for prompt
         contact_notes = db.get_notes(sender) or ""
@@ -909,9 +902,9 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
         if is_newly_complete:
             prompt_variables["completion_status"] = "Profilo appena completato! ✅"
             prompt_variables["missing_fields_instruction"] = "Ringrazia il cliente per aver fornito tutte le informazioni."
-            logger.info(f"✅ Profile completed for {sender}")
+            logger.info(f"Profile completed for {sender}")
 
-        logger.info(f"📝 Prompt variables: Status={prompt_variables['completion_status']}")
+        logger.debug(f"Prompt status: {prompt_variables['completion_status']}")
 
         # Generate AI response with image (this will use gpt-4o)
         ai_response = ai_manager.generate_response_with_image(
@@ -939,10 +932,14 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
             if manual_mode:
                 # Save draft and do not send
                 db.save_ai_draft(sender, ai_response)
-                logger.info(f"📝 Draft stored for +{sender} (Manuale ON)")
+                logger.info(f"Draft stored for +{sender[-4:]} (manual mode)")
             else:
                 # Clear any existing draft before sending automatic response
                 db.clear_ai_draft(sender)
+
+                # Log AI response before sending
+                logger.info(f"🤖 AI Response (Image) for [bold]{contact_name}[/bold]")
+                logger.info(f"   [green]→[/green] {ai_response}")
 
                 # Split long messages if needed
                 if len(ai_response) > 4000:
@@ -951,7 +948,8 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
                         send_whatsapp_message(sender, chunk)
                 else:
                     send_whatsapp_message(sender, ai_response)
-                logger.info(f"✅ AI image response sent to {contact_name}")
+                logger.info(f"✓ Sent to WhatsApp")
+                logger.info("")  # Blank line after conversation
         else:
             logger.error("No response generated from AI")
             if not manual_mode:
@@ -970,7 +968,7 @@ def process_status(status):
     msg_id = status.get('id')
     status_type = status.get('status')
 
-    logger.info(f"📊 Status update: {status_type} for message {msg_id}")
+    logger.debug(f"Status: {status_type} for message {msg_id}")
 
     # Update message status in database
     if msg_id and status_type:
@@ -979,7 +977,7 @@ def process_status(status):
     if status_type == 'failed':
         errors = status.get('errors', [])
         for error in errors:
-            logger.error(f"   Error: {error.get('title')} - {error.get('message')}")
+            logger.error(f"Message failed: {error.get('title')} - {error.get('message')}")
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -1031,28 +1029,28 @@ def serve_image(phone, filename):
         from flask import send_from_directory
         import os
 
-        logger.info(f"Image request: phone={phone}, filename={filename}")
+        logger.debug(f"Image request: phone={phone}, filename={filename}")
 
         # Construct the path to the image
         image_dir = os.path.join('images', phone)
-        logger.info(f"Looking for image in: {image_dir}")
+        logger.debug(f"Looking for image in: {image_dir}")
 
         # Security: Check if directory exists and file exists
         if not os.path.exists(image_dir):
             logger.warning(f"Image directory not found: {image_dir}")
             # List what directories DO exist
             if os.path.exists('images'):
-                logger.info(f"Available phone directories: {os.listdir('images')}")
+                logger.debug(f"Available phone directories: {os.listdir('images')}")
             return "Image not found", 404
 
         file_path = os.path.join(image_dir, filename)
         if not os.path.exists(file_path):
             logger.warning(f"Image file not found: {file_path}")
             # List what files DO exist in this directory
-            logger.info(f"Available files in {image_dir}: {os.listdir(image_dir)}")
+            logger.debug(f"Available files in {image_dir}: {os.listdir(image_dir)}")
             return "Image not found", 404
 
-        logger.info(f"✅ Serving image: {file_path}")
+        logger.debug(f"Serving image: {file_path}")
         # Serve the file
         return send_from_directory(image_dir, filename)
     except Exception as e:

@@ -30,8 +30,8 @@ class DataExtractor:
         """
         self.client = OpenAI(api_key=api_key)
         self.model = model
-        
-        logger.info(f"Data Extractor initialized with model: {self.model}")
+
+        logger.debug(f"Data Extractor initialized with model: {self.model}")
     
     def _calculate_what_is_missing(self, name, last_name, ragione_sociale, email):
         """Calculate what information is missing from a profile"""
@@ -139,10 +139,10 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
                     extracted_info.email = current_info.email
             
             # Log the FINAL merged state, not just extraction
-            logger.info(f"Profile after extraction - Complete: {extracted_info.found_all_info}")
+            logger.debug(f"Profile after extraction - Complete: {extracted_info.found_all_info}")
             if not extracted_info.found_all_info:
-                logger.info(f"Still missing: {extracted_info.what_is_missing}")
-            
+                logger.debug(f"Still missing: {extracted_info.what_is_missing}")
+
             return extracted_info
             
         except Exception as e:
@@ -203,8 +203,8 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
             'hubspot_contact_id': None
         }
         db.save_profile(whatsapp_number, profile_data)
-        
-        logger.info(f"Created new profile for {whatsapp_number}")
+
+        logger.debug(f"Created new profile for {whatsapp_number}")
         return profile
     
     def update_profile(self, whatsapp_number: str, new_info: ClientInfo) -> ClientProfile:
@@ -241,7 +241,7 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
         db.save_profile(whatsapp_number, profile_data)
         
         if is_newly_complete:
-            logger.info(f"Profile completed for {whatsapp_number}: {new_info.to_display_string()}")
+            logger.info(f"✅ [bold green]Profile Completed![/bold green] {new_info.to_display_string()}")
             
             # Send webhook notification asynchronously
             try:
@@ -364,9 +364,9 @@ In what_is_missing, descrivi in italiano cosa manca ancora."""
             ])
             
             if is_complete:
-                logger.info(f"Profile manually completed for {whatsapp_number}")
-            
-            logger.info(f"Profile manually updated for {whatsapp_number}")
+                logger.info(f"✅ [bold green]Profile Manually Completed![/bold green] {whatsapp_number}")
+            else:
+                logger.debug(f"Profile manually updated for {whatsapp_number}")
             return True
             
         except Exception as e:
