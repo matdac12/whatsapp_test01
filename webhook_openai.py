@@ -20,6 +20,7 @@ from openai_conversation_manager import OpenAIConversationManager
 from data_extractor import DataExtractor
 from data_models import ClientInfo
 from database import db
+from order_tools import AVAILABLE_TOOLS
 
 # Note: Logging is already configured by start_openai_bot.py via logging_config
 # If running standalone, logging_config.setup_logging() will be called below
@@ -519,6 +520,10 @@ def process_message(message, contacts):
     msg_from = message.get('from')
     msg_id = message.get('id')
     msg_type = message.get('type')
+
+    # Normalize phone number to international format with + prefix
+    if msg_from and not msg_from.startswith('+'):
+        msg_from = '+' + msg_from
     
     # Check for duplicate processing (deduplication)
     if db.is_message_processed(msg_id):
@@ -759,6 +764,7 @@ def handle_ai_conversation(sender, text, contact_name):
             "client_lastname": client_info.last_name or "non_fornito",
             "client_company": client_info.ragione_sociale or "non_fornito",
             "client_email": client_info.email or "non_fornito",
+            "client_phone_number": sender,
             "completion_status": "Profilo completo ✅" if client_info.found_all_info else "Profilo incompleto 📝",
             "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}",
             "agent_notes": contact_notes
@@ -771,9 +777,9 @@ def handle_ai_conversation(sender, text, contact_name):
             logger.info(f"Profile completed for {sender}")
 
         logger.debug(f"Prompt status: {prompt_variables['completion_status']}")
-        
-        # Generate AI response with variables
-        ai_response = ai_manager.generate_response(sender, text, prompt_variables)
+
+        # Generate AI response with variables and tools
+        ai_response = ai_manager.generate_response(sender, text, prompt_variables, tools=AVAILABLE_TOOLS)
         
         # STEP 3: Update conversation with extracted data if significant info was found
         if any([client_info.name, client_info.last_name, client_info.ragione_sociale, client_info.email]):
@@ -893,6 +899,7 @@ def handle_ai_image_conversation(sender, image_bytes, mime_type, caption, contac
             "client_lastname": client_info.last_name or "non_fornito",
             "client_company": client_info.ragione_sociale or "non_fornito",
             "client_email": client_info.email or "non_fornito",
+            "client_phone_number": sender,
             "completion_status": "Profilo completo ✅" if client_info.found_all_info else "Profilo incompleto 📝",
             "missing_fields_instruction": "" if client_info.found_all_info else f"Richiedi cortesemente: {client_info.what_is_missing}",
             "agent_notes": contact_notes
@@ -1178,12 +1185,13 @@ def api_regenerate_draft(phone):
             'client_lastname': 'non_fornito',
             'client_company': 'non_fornito',
             'client_email': 'non_fornito',
+            'client_phone_number': phone,
             'completion_status': '',
             'missing_fields_instruction': '',
             'agent_notes': combined_notes,
         }
 
-        new_draft = ai_manager.generate_response(phone, last_user_msg, prompt_variables)
+        new_draft = ai_manager.generate_response(phone, last_user_msg, prompt_variables, tools=AVAILABLE_TOOLS)
         if new_draft:
             db.save_ai_draft(phone, new_draft)
             return jsonify({'success': True, 'draft': new_draft})

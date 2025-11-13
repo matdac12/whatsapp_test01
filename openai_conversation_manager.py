@@ -11,7 +11,7 @@ import sys
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from openai import OpenAI
 from database import db
 
@@ -121,22 +121,23 @@ class OpenAIConversationManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
-    def generate_response(self, user_id: str, message: str, prompt_variables: Optional[Dict[str, str]] = None) -> str:
+    def generate_response(self, user_id: str, message: str, prompt_variables: Optional[Dict[str, str]] = None, tools: Optional[List[Any]] = None) -> str:
         """
-        Generate an AI response for a user message
-        
+        Generate an AI response for a user message with optional tool support
+
         Args:
             user_id: WhatsApp user ID
             message: User's message text
             prompt_variables: Optional dictionary of variables to pass to the prompt
-            
+            tools: Optional list of OpenAI tool definitions
+
         Returns:
             AI-generated response text
         """
         try:
             # Get or create conversation
             conversation_id = self.get_or_create_conversation(user_id, message)
-            
+
             logger.debug(f"Generating response for user {user_id}")
             # Safely log the message
             try:
@@ -147,38 +148,130 @@ class OpenAIConversationManager:
             # Log variables if provided
             if prompt_variables:
                 logger.debug(f"Prompt variables: {prompt_variables}")
-            
+
+            # Log tools if provided
+            if tools:
+                logger.debug(f"Tools available: {len(tools)} tools")
+
             # Ensure message is properly encoded
             message_utf8 = message.encode('utf-8').decode('utf-8')
-            
+
             # Build prompt configuration
             prompt_config = {"id": self.prompt_id}
-            
+
             # Add variables if provided
             if prompt_variables:
                 prompt_config["variables"] = prompt_variables
-            
+
+            # Build request parameters for Responses API
+            request_params = {
+                "prompt": prompt_config,
+                "input": [{"role": "user", "content": message_utf8}],
+                "model": self.model,
+                "conversation": conversation_id
+            }
+
+            # Add tools if provided (Responses API format)
+            if tools:
+                request_params["tools"] = tools
+                request_params["tool_choice"] = "auto"
+
             # Generate response using the Responses API
-            response = self.client.responses.create(
-                prompt=prompt_config,
-                input=[{"role": "user", "content": message_utf8}],
-                model=self.model,
-                conversation=conversation_id
-                # No stream parameter as we don't want streaming
-            )
-            
-            # Get the output text
+            response = self.client.responses.create(**request_params)
+
+            # Check if response contains tool calls
+            if hasattr(response, 'output') and response.output:
+                first_message = response.output[0]
+                if hasattr(first_message, 'type') and first_message.type == 'function_call':
+                    logger.debug(f"🔧 Response contains function call: {first_message.name}")
+
+                    # Execute the tool and get final response
+                    # Pass the original input and the response output
+                    final_response = self._handle_tool_calls_responses(
+                        conversation_id=conversation_id,
+                        original_input=[{"role": "user", "content": message_utf8}],
+                        response_output=response.output,
+                        prompt_config=prompt_config,
+                        tools=tools
+                    )
+                    return final_response
+
+            # No tool calls, return regular response
             output_text = response.output_text
 
             # Log safely with proper encoding
             log_preview = output_text[:100] if len(output_text) > 100 else output_text
             logger.debug(f"Generated response: {log_preview}...")
             return output_text
-            
+
         except Exception as e:
             logger.error(f"Error generating response: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             # Return a fallback message
             return "I apologize, but I'm having trouble processing your message right now. Please try again."
+
+    def _handle_tool_calls_responses(self, conversation_id: str, original_input: List[Dict],
+                                     response_output: List[Any], prompt_config: Dict, tools: List[Any]) -> str:
+        """
+        Handle function calls from Responses API following the official example pattern
+
+        Args:
+            conversation_id: OpenAI conversation ID
+            original_input: The original input that triggered the function call
+            response_output: The response.output containing the function_call
+            prompt_config: Prompt configuration
+            tools: Available tools
+
+        Returns:
+            Final AI response after tool execution
+        """
+        from order_tools import execute_tool_call
+
+        # When using conversations, the conversation already has the history
+        # We only need to send the function_call_output
+        input_list = []
+
+        # Process each function call in the output
+        for item in response_output:
+            if item.type == "function_call":
+                tool_name = item.name
+                call_id = item.call_id
+                tool_arguments = json.loads(item.arguments) if isinstance(item.arguments, str) else item.arguments
+
+                logger.debug(f"🔧 Executing tool: {tool_name} (call_id: {call_id})")
+                logger.debug(f"🔧 Arguments: {tool_arguments}")
+
+                # Execute the tool
+                result = execute_tool_call(tool_name, tool_arguments)
+
+                logger.debug(f"🔧 Tool result: {result}")
+
+                # Add only the function call output
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(result)
+                })
+
+        # Send only the function outputs (conversation already has the calls)
+        logger.debug(f"🔧 Sending function outputs back to OpenAI ({len(input_list)} items)")
+
+        response = self.client.responses.create(
+            prompt=prompt_config,
+            input=input_list,
+            model=self.model,
+            conversation=conversation_id,
+            tools=tools,
+            tool_choice="auto"
+        )
+
+        # Return final response text
+        output_text = response.output_text
+        log_preview = output_text[:100] if len(output_text) > 100 else output_text
+        logger.debug(f"✅ Final response after tool execution: {log_preview}...")
+
+        return output_text
 
     def generate_response_with_image(self, user_id: str, image_base64: str, mime_type: str,
                                      caption: Optional[str] = None,
