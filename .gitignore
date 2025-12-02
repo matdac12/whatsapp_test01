@@ -95,7 +95,16 @@ ngrok.exe
 ngrok.yml
 
 # WhatsApp API examples
-whatsapp-api-examples/logs/
+whatsapp-api-examples/
 logs/
 openai-agents-python-main/
 openai-python-main/
+
+# Internal documentation (local reference only)
+Documentazione/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Test output files
+test_conversation.html
